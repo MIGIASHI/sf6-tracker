@@ -1,0 +1,4 @@
+numpy
+opencv-python-headless
+obsws-python>=1.7
+rapidocr-onnxruntime>=1.2.3
