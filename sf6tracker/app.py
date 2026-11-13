@@ -62,16 +62,28 @@ class App:
             return next((f[2] for f in self.frames if f[0] == seq), None)
 
     def loop(self):
+        sf6 = lambda: self.cfg["detect"].get("layout", "sf6") == "sf6"
         while self.running:
             t0 = time.time()
+            # a result screen can be gone within a second: look more often while one is due or showing
+            interval = self.detector.hurry or float(self.cfg["capture"]["interval"])
             try:
                 with self.cap_lock:
-                    frame = self.capture.grab()
+                    if self.is_file:
+                        self.capture.interval = interval
+                    look = int(self.cfg["capture"].get("look_width") or 0) if sf6() else 0
+                    frame = self.capture.grab(look or None)
                 if frame is not None:
                     # a played-back file runs on its own clock so timing rules behave as in a live match
                     now = self.t_base + self.capture.t if self.is_file else t0
-                    self.push_frame(frame, now)
-                    self.detector.process(frame, now)
+                    got = []
+
+                    def full():
+                        with self.cap_lock:
+                            got.append(self.capture.full())
+                        return got[-1]
+                    self.detector.process(frame, now, full if look else None)
+                    self.push_frame(got[-1] if got and got[-1] is not None else frame, now)
                     self.error = None
             except Exception as e:  # keep the stream tool alive whatever happens
                 self.error = "%s: %s" % (type(e).__name__, e)
@@ -81,7 +93,7 @@ class App:
                 continue
             # Never work more than a third of the time, however slow one look at the screen gets.
             busy = time.time() - t0
-            wait = 0.05 if self.is_file else max(2.0 * busy, float(self.cfg["capture"]["interval"]) - busy, 0.1)
+            wait = 0.05 if self.is_file else max(2.0 * busy, interval - busy, 0.1)
             time.sleep(wait)
 
     def start(self):
@@ -110,7 +122,10 @@ class App:
             rated = [m for m in allm if m.get("rating") is not None]
             if rated:
                 s["rating"] = rated[-1]["rating"]
-        s["label"] = self.cfg["player"].get("rating_label", "MR")
+        # the label read off the screen (LP below Master, MR above) wins over the one in the settings
+        shown = [m for m in allm if m.get("rating") is not None and m.get("rating_label")]
+        fixed = self.cfg["player"].get("rating_label")
+        s["label"] = shown[-1]["rating_label"] if shown else (fixed if fixed in ("MR", "LP") else "MR")
         s["scope"] = scope
         s["matches"] = [self.decorate(m) for m in ms[::-1][:50]]
         return s
@@ -126,26 +141,25 @@ class App:
 
     def test_frame(self, seq=None):
         """Run every check on one buffered frame and report what was seen."""
-        frame = self.frame(seq)
+        frame = None
+        if seq is None and not self.is_file:  # the buffered pictures may be the small ones: take a fresh full one
+            with self.cap_lock:
+                frame = self.capture.full()
+        if frame is None:
+            frame = self.frame(seq)
         if frame is None:
             return {"error": "フレームがありません"}
         from .detector import FrameContext
         ctx = FrameContext(frame, self.ocr)
         d = self.detector
-        out = {"signals": {}, "chars": {}, "texts": {}}
-        for name in self.cfg["signals"]:
-            ok, info, _ = d.check_signal(name, ctx)
-            out["signals"][name] = dict(info, found=ok)
-        for side in ("p1", "p2"):
-            cid, _ = d.read_char(side, ctx)
-            out["chars"][side] = {"id": cid, "name": char_name(cid, self.cfg["display"]["char_lang"]) if cid else None}
-        seen = d.find_side(ctx)
-        side, by = (seen, "name") if seen else d.my_side({s: out["chars"][s]["id"] for s in ("p1", "p2")})
-        out["side"] = {"side": side, "by": by}
-        out["rating"] = d.read_rating(ctx, side)
-        for name, roi in self.cfg["rois"].items():
-            if roi:
-                out["texts"][name] = [it["text"] for it in ctx.texts(roi)]
+        out = d.inspect(ctx)
+        out["chars"] = {s: {"id": c, "name": char_name(c, self.cfg["display"]["char_lang"]) if c else None}
+                        for s, c in out["chars"].items()}
+        out["texts"] = {}
+        if self.cfg["detect"].get("layout", "sf6") != "sf6":
+            for name, roi in self.cfg["rois"].items():
+                if roi:
+                    out["texts"][name] = [it["text"] for it in ctx.texts(roi)]
         out["all_texts"] = [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in it.items()} for it in ctx.texts(None, fine=True)]
         return out
 

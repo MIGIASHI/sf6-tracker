@@ -9,11 +9,13 @@ import threading
 # ROI = [x, y, w, h] as fractions of the frame (0-1). None = search the whole frame.
 DEFAULT = {
     "obs": {"host": "127.0.0.1", "port": 4455, "password": "", "source": ""},
-    "capture": {"width": 1280, "interval": 1.5},
+    # width: picture used for reading text. look_width: small picture for the cheap colour checks that run
+    # on every tick (the big one is only fetched when there is something to read).
+    "capture": {"width": 1280, "look_width": 640, "interval": 1.5},
     "server": {"port": 17860},
     # names: my player name(s) as shown in game -> decides each match whether I am 1P or 2P.
     # chars: characters I use (second clue). side: used only when neither clue works.
-    "player": {"names": [], "chars": [], "side": "p1", "rating_label": "MR"},
+    "player": {"names": [], "chars": [], "side": "p1", "rating_label": "auto"},  # rating_label: auto / MR / LP
     "display": {"char_lang": "ja"},
     "rois": {"vs": None, "result": None, "rating": None, "p1_char": None, "p2_char": None,
              "p1_name": None, "p2_name": None},
@@ -23,6 +25,9 @@ DEFAULT = {
         "lose": {"roi": "result", "keywords": ["LOSE", "LOSES", "LOSER", "DEFEAT"], "templates": []},
     },
     "detect": {
+        # "sf6": the real game screens at their fixed places (16:9). "generic": only the ROIs,
+        # keywords and templates set by hand above (other games, unusual layouts).
+        "layout": "sf6",
         "confirm_ticks": 2,        # same result on N ticks in a row before a match is recorded
         "cooldown": 45.0,          # seconds after a result during which no new match is recorded
         "template_threshold": 0.80,

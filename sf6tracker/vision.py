@@ -63,6 +63,9 @@ def lower_priority():
     try:
         import ctypes
         k = ctypes.windll.kernel32
+        # without these the 64-bit process handle is cut down to 32 bits and the call silently fails
+        k.GetCurrentProcess.restype = ctypes.c_void_p
+        k.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
         k.SetPriorityClass(k.GetCurrentProcess(), 0x00004000)  # BELOW_NORMAL_PRIORITY_CLASS
     except Exception:
         pass
@@ -94,12 +97,13 @@ class Ocr:
                 self.error = "OCR を読み込めません: %s" % e
         return self._engine
 
-    def read(self, frame, roi=None, det_width=None, top=None):
+    def read(self, frame, roi=None, det_width=None, top=None, scale=None):
         """Read text in a frame (or one ROI of it).
 
         det_width: look for text on a copy shrunk to this width (cheap); the letters themselves
                    are still read from the full-size picture.
         top:       read only the N tallest pieces of text.
+        scale:     enlarge the crop by this factor (default: small crops are blown up to 240 px high).
         """
         with self._lock:
             engine = self._get()
@@ -107,8 +111,8 @@ class Ocr:
                 return []
             img = crop(frame, roi)
             ih, iw = img.shape[:2]
-            if ih < 240:  # small crops read better enlarged
-                k = min(4.0, 240.0 / ih)
+            k = scale if scale else (min(4.0, 240.0 / ih) if ih < 240 else 1.0)  # small crops read better enlarged
+            if k != 1.0:
                 img = cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC)
             try:
                 rows = self._staged(engine, img, det_width, top) if self._can_stage(engine) else self._plain(engine, img)
@@ -209,6 +213,11 @@ def match_character(text):
     for alias, cid in _ALIASES:
         if n == alias:
             return cid
+    # SF6 draws the control-type icon (C / M / D) right before the name; OCR glues it on: "CDHALSIM", "CJP"
+    if len(n) >= 3 and n[0] in "CMDG":
+        for alias, cid in _ALIASES:
+            if n[1:] == alias:
+                return cid
     if len(n) >= 5:  # short names (ED, JP, KEN...) must match exactly
         best, score = None, 0.0
         for alias, cid in _ALIASES:
@@ -248,6 +257,80 @@ def find_rating(items, label, lo, hi, prefer_left=True):
     if label:  # asked for a labelled number and the label is not on screen
         return None
     return nums[0][0] if len({n[0] for n in nums}) == 1 else None
+
+
+_RATING_RE = re.compile(r"(?<![\d+\-.,:])(\d{1,3}(?:,\d{3})+|\d{3,6})\s*(LP|MR)(?![A-Z])|(?<![A-Z])(LP|MR)\s*[:\uff1a]?\s*(\d{1,3}(?:,\d{3})+|\d{3,6})(?!\d)")
+
+
+def find_ratings(items, lo=0, hi=999999):
+    """Every 'number + LP/MR' (either order, glued or spaced) in OCR items: [(value, label, item)]."""
+    out = []
+    for it in items:
+        for m in _RATING_RE.finditer(it["text"].upper()):
+            num, label = (m.group(1), m.group(2)) if m.group(1) else (m.group(4), m.group(3))
+            v = int(num.replace(",", ""))
+            if lo <= v <= hi:
+                out.append((v, label, it))
+    return out
+
+
+def _part(frame, x0, y0, x1, y1):
+    h, w = frame.shape[:2]
+    return frame[int(y0 * h):max(int(y0 * h) + 1, int(y1 * h)), int(x0 * w):max(int(x0 * w) + 1, int(x1 * w))]
+
+
+def result_bar_likely(frame):
+    """Cheap look (no OCR) for the SF6 result bar: white "WIN" in one slot, grey "LOSE" on dark in the other.
+
+    Only a first sieve. It lets a few other pictures through (those then get read properly) but
+    does not miss the bar, which is what makes it safe to skip the reading on every other frame.
+    """
+    slots = []
+    for x0, x1 in ((0.430, 0.466), (0.534, 0.572)):
+        b = _part(frame, x0, 0.776, x1, 0.810)
+        slots.append((float((b.min(axis=2) > 200).mean()), float((b.max(axis=2) < 130).mean())))
+    (wl, dl), (wr, dr) = slots
+    return (0.05 <= wl <= 0.65 and wr < 0.04 and dr > 0.45) or (0.05 <= wr <= 0.65 and wl < 0.04 and dl > 0.45)
+
+
+def battle_hud_likely(frame):
+    """Cheap look (no OCR) for the round timer: big purple digits top centre. Menus can look alike,
+    so this only decides whether reading the HUD is worth trying."""
+    hsv = cv2.cvtColor(_part(frame, 0.475, 0.045, 0.525, 0.12), cv2.COLOR_BGR2HSV)
+    purple = (hsv[..., 0] >= 130) & (hsv[..., 0] <= 170) & (hsv[..., 1] > 90) & (hsv[..., 2] > 110)
+    return float(purple.mean()) >= 0.25
+
+
+def result_words(items):
+    """{'WIN': x, 'LOSE': x}: where the two words of the SF6 result bar "WIN 1-0 LOSE" stand.
+
+    OCR returns the bar in one piece ("WIN1-0 LOSE") or in several, so the words are located
+    inside the text they came in.
+    """
+    pos = {}
+    for it in items:
+        t = it["text"].upper()
+        for m in re.finditer(r"WIN|LOSE", t):
+            pos.setdefault(m.group(0), it["x"] + it["w"] * (m.start() + m.end()) / 2.0 / len(t))
+    return pos
+
+
+def p1_result(items):
+    """'win' / 'lose' for player 1 from the result bar (left word = 1P, right word = 2P), or None."""
+    pos = result_words(items)
+    w, l = pos.get("WIN"), pos.get("LOSE")
+    if w is not None and l is not None:
+        return "win" if w < l else "lose"
+    x = w if w is not None else l
+    if x is None or not 0.02 <= abs(x - 0.5) <= 0.09:  # one word alone must sit where the bar puts it
+        return None
+    return "win" if (x < 0.5) == (w is not None) else "lose"
+
+
+def player_seat(text):
+    """'p1' / 'p2' for the "PLAYER1" / "PLAYER2" label of the result screen."""
+    m = re.search(r"PLAYER\s*([12])", text.upper())
+    return "p" + m.group(1) if m else None
 
 
 def _fold(text):
