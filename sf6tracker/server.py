@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 WEB = os.path.join(os.path.dirname(__file__), "web")
-PAGES = {"/": "control.html", "/control": "control.html", "/overlay": "overlay.html"}
+PAGES = {"/": "control.html", "/control": "control.html", "/overlay": "overlay.html", "/input": "input.html"}
 
 
 def make_handler(app):

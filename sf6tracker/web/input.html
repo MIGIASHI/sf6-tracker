@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>SF6 Input Display</title>
+<style>
+  :root { --on:#ffd34d; --off:rgba(255,255,255,.10); --rim:rgba(255,255,255,.28); --ink:#f4f6fb; --dim:#9aa3b8;
+          --panel:rgba(14,17,28,.78); --radius:16px; --lp:#5aa2ff; --mp:#ffd34d; --hp:#ff5c7c; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:transparent; overflow:hidden; }
+  body { font-family:"Segoe UI","Yu Gothic UI","Meiryo",system-ui,sans-serif; color:var(--ink); user-select:none; }
+  #wrap { display:inline-flex; flex-direction:column; gap:4px; padding:8px; transform-origin:top left; }
+  #row { display:flex; gap:10px; align-items:flex-start; }
+  .credit { font-size:11px; letter-spacing:.08em; color:#c9cfdc; text-shadow:0 0 3px #000, 0 1px 2px #000; text-align:right; padding:0 4px; white-space:nowrap; }
+  .credit b { font-weight:800; color:var(--ink); opacity:.9; }
+  #wrap.nobg .credit { text-shadow:0 0 4px #000, 0 1px 3px #000; }
+  .box { background:var(--panel); border-radius:var(--radius); padding:14px; }
+  #wrap.nobg .box { background:none; }
+  svg { display:block; overflow:visible; }
+  .b { fill:var(--off); stroke:var(--rim); stroke-width:2; transition:fill .04s; }
+  .b.on { fill:var(--on); stroke:#fff; }
+  .b.on.c0 { fill:var(--lp); } .b.on.c1 { fill:var(--mp); } .b.on.c2 { fill:var(--hp); }
+  .lab { fill:var(--dim); font-size:13px; font-weight:700; text-anchor:middle; dominant-baseline:central; pointer-events:none; }
+  .lab.on { fill:#0b0e16; }
+  .gate { fill:none; stroke:var(--rim); stroke-width:2; }
+  .shaft { stroke:#c8cede; stroke-width:7; stroke-linecap:round; }
+  .ball { fill:#e8485f; stroke:#fff; stroke-width:2; }
+  /* history */
+  #hist { width:150px; font-variant-numeric:tabular-nums; }
+  #hist .row { display:flex; align-items:center; gap:6px; height:26px; border-top:1px solid rgba(255,255,255,.07); font-size:15px; }
+  #hist .row:first-child { border-top:0; }
+  #hist .n { width:30px; text-align:right; color:var(--dim); font-size:12px; }
+  #hist .d { width:20px; text-align:center; font-size:17px; }
+  #hist .k { display:inline-block; min-width:24px; padding:0 4px; border-radius:5px; font-size:11px; font-weight:800; text-align:center; line-height:18px; color:#0b0e16; background:var(--on); }
+  #hist .k.c0 { background:var(--lp); } #hist .k.c1 { background:var(--mp); } #hist .k.c2 { background:var(--hp); }
+  #msg { color:var(--dim); font-size:13px; padding:4px 2px 0; }
+
+  /* designer (?setup=1) */
+  #setup { display:none; position:fixed; left:0; right:0; bottom:0; max-height:62vh; overflow:auto; background:#161a26; color:#eef1f8; border-top:1px solid #2c3347; padding:12px 16px; font-size:13px; }
+  body.setup { background:repeating-conic-gradient(#4a556e 0 25%, #58647f 0 50%) 0 0/28px 28px; min-height:100vh; overflow:auto; padding-bottom:62vh; }
+  body.setup #setup { display:block; }
+  #setup .g { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin-bottom:8px; }
+  #setup label { display:inline-flex; gap:5px; align-items:center; white-space:nowrap; }
+  #setup select, #setup input[type=number], #setup input[type=text] { background:#252b3d; color:#eef1f8; border:1px solid #2c3347; border-radius:5px; padding:3px 6px; font:inherit; }
+  #setup input[type=number] { width:60px; } #setup input[type=text] { width:60px; }
+  #setup button { background:#252b3d; color:#eef1f8; border:1px solid #2c3347; border-radius:5px; padding:4px 10px; font:inherit; cursor:pointer; }
+  #setup button.wait { border-color:#ffd34d; color:#ffd34d; }
+  #setup button.pri { background:#5aa2ff; color:#08101f; border:0; font-weight:700; }
+  #setup .map { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:6px; }
+  #setup .slot { display:flex; gap:6px; align-items:center; background:#1d2232; border-radius:6px; padding:5px 6px; }
+  #setup .slot b { width:34px; }
+  #setup .url { display:flex; gap:8px; align-items:center; margin-top:8px; }
+  #setup code { flex:1; background:#0d1018; padding:6px 8px; border-radius:5px; word-break:break-all; user-select:all; }
+  #setup .hint { color:#98a1b8; margin:4px 0; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="row"><div class="box" id="dev"></div><div class="box" id="hist" style="display:none"></div></div><div class="credit">Made by <b>WASURENE.</b></div></div>
+<div id="msg"></div>
+
+<div id="setup">
+  <div class="g">
+    <label>タイプ <select data-k="type"><option value="pad">ゲームパッド</option><option value="leverless">レバーレス</option><option value="stick">レバーアケコン</option></select></label>
+    <label>コントローラー <select data-k="pad" id="padSel"></select></label>
+    <label><input type="checkbox" data-k="history">入力履歴</label>
+    <label>履歴の行数 <input type="number" data-k="rows" min="3" max="30"></label>
+    <label><input type="checkbox" data-k="frames">フレーム数</label>
+  </div>
+  <div class="g">
+    <label>大きさ <input type="number" data-k="scale" min="0.3" max="3" step="0.1"></label>
+    <label>背景 <select data-k="bgmode"><option value="color">色</option><option value="none">なし</option></select></label>
+    <label>背景色 <input type="color" data-k="bg"></label>
+    <label>濃さ <input type="range" data-k="alpha" min="0" max="1" step="0.05"></label>
+    <label>押した色 <input type="color" data-k="on"></label>
+    <label><input type="checkbox" data-k="color3">P/K を強さで色分け</label>
+  </div>
+  <div class="hint">ボタンの割り当て：「設定」を押してから、コントローラーのそのボタンを押してください。名前も変えられます。</div>
+  <div class="map" id="map"></div>
+  <div class="g" style="margin-top:8px"><button id="reset">割り当てを初期値に戻す</button></div>
+  <div class="url"><code id="url"></code><button class="pri" id="copy">URLをコピー</button></div>
+  <div class="hint">この URL を OBS のブラウザソースに貼ると、この見た目で表示されます（幅・高さは表示に合わせて調整してください）。</div>
+</div>
+
+<script>
+// ---------- settings (all in the URL so each browser source keeps its own) ----------
+// type=pad|leverless|stick  pad=any|0..3  history=1 rows=12 frames=1  scale=1  bg=0e111c|none alpha=0.78  on=ffd34d  color3=1
+// map=LP,MP,HP,LK,MK,HK,E1,E2 as gamepad button numbers   names=LP,MP,HP,LK,MK,HK,E1,E2
+const ACTIONS = ['LP', 'MP', 'HP', 'LK', 'MK', 'HK', 'E1', 'E2'];
+// Standard-mapping defaults, the SF6 classic layout most sticks and pads ship with:
+// X=LP Y=MP RB=HP / A=LK B=MK RT=HK / LB, LT = extra (drive parry / impact etc.)
+const DEFMAP = [2, 3, 5, 0, 1, 7, 4, 6];
+const DEFNAMES = { pad: ['□', '△', 'R1', '×', '○', 'R2', 'L1', 'L2'], leverless: ['LP', 'MP', 'HP', 'LK', 'MK', 'HK', 'L1', 'L2'], stick: ['LP', 'MP', 'HP', 'LK', 'MK', 'HK', 'L1', 'L2'] };
+const STRENGTH = [0, 1, 2, 0, 1, 2, -1, -1];
+const Q = new URLSearchParams(location.search);
+const S = { type: 'stick', pad: 'any', history: false, rows: 12, frames: true, scale: 1, bgmode: 'color', bg: '#0e111c', alpha: 0.78, on: '#ffd34d', color3: false, map: DEFMAP.slice(), names: null };
+const DEF = JSON.parse(JSON.stringify(S));
+if (['pad', 'leverless', 'stick'].includes(Q.get('type'))) S.type = Q.get('type');
+if (/^(any|[0-3])$/.test(Q.get('pad') || '')) S.pad = Q.get('pad');
+if (Q.get('history') === '1') S.history = true;
+if (Q.get('frames') === '0') S.frames = false;
+if (+Q.get('rows')) S.rows = Math.max(3, Math.min(30, +Q.get('rows')));
+if (+Q.get('scale')) S.scale = +Q.get('scale');
+if (Q.get('bg') === 'none') S.bgmode = 'none'; else if (/^[0-9a-f]{6}$/i.test(Q.get('bg') || '')) S.bg = '#' + Q.get('bg');
+if (Q.get('alpha') !== null && !isNaN(+Q.get('alpha'))) S.alpha = +Q.get('alpha');
+if (/^[0-9a-f]{6}$/i.test(Q.get('on') || '')) S.on = '#' + Q.get('on');
+if (Q.get('color3') === '1') S.color3 = true;
+if (Q.get('map')) { const m = Q.get('map').split(',').map(Number); if (m.length === 8 && m.every(n => n >= 0 && n < 32)) S.map = m; }
+if (Q.get('names')) { const n = Q.get('names').split(','); if (n.length === 8) S.names = n.map(x => x.slice(0, 4)); }
+const SETUP = !!Q.get('setup');
+const names = () => S.names || DEFNAMES[S.type];
+
+// ---------- drawing ----------
+const NS = 'http://www.w3.org/2000/svg';
+let parts = {};   // id -> [elements] that light up
+function el(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent && parent.appendChild(e); return e; }
+function btn(svg, id, shape, label, strength) {
+  const g = el('g', {}, svg);
+  const b = shape(g); b.classList.add('b'); if (S.color3 && strength >= 0) b.classList.add('c' + strength);
+  const out = [b];
+  if (label !== undefined) {
+    const bb = shape.center;
+    const t = el('text', { x: bb[0], y: bb[1], class: 'lab' }, g); t.textContent = label; out.push(t);
+  }
+  (parts[id] = parts[id] || []).push(...out);
+}
+function circle(cx, cy, r) { const f = g => el('circle', { cx, cy, r }, g); f.center = [cx, cy]; return f; }
+function rrect(x, y, w, h, r) { const f = g => el('rect', { x, y, width: w, height: h, rx: r }, g); f.center = [x + w / 2, y + h / 2]; return f; }
+function poly(pts, c) { const f = g => el('polygon', { points: pts.map(p => p.join(',')).join(' ') }, g); f.center = c; return f; }
+
+// Vewlix-style 8 buttons: top row LP MP HP E1, bottom row LK MK HK E2, gently curved like a real panel.
+function eightButtons(svg, ox, oy, r) {
+  const n = names(), dx = r * 2.35, curve = [0, -r * 0.55, -r * 0.55, -r * 0.2];
+  const top = [0, 1, 2, 6], bot = [3, 4, 5, 7];
+  top.forEach((a, i) => btn(svg, 'a' + a, circle(ox + i * dx, oy + curve[i], r), n[a], STRENGTH[a]));
+  bot.forEach((a, i) => btn(svg, 'a' + a, circle(ox + i * dx, oy + r * 2.4 + curve[i], r), n[a], STRENGTH[a]));
+}
+
+let ball = null, shaft = null, stickC = null;
+function build() {
+  parts = {}; ball = shaft = null;
+  const dev = document.getElementById('dev');
+  dev.innerHTML = '';
+  let svg;
+  if (S.type === 'stick') {
+    svg = el('svg', { width: 400, height: 150, viewBox: '0 0 400 150' }, dev);
+    stickC = [70, 78];
+    el('circle', { cx: 70, cy: 78, r: 52, class: 'gate' }, svg);
+    el('rect', { x: 34, y: 42, width: 72, height: 72, rx: 10, class: 'gate', 'stroke-dasharray': '4 5' }, svg);
+    shaft = el('line', { x1: 70, y1: 78, x2: 70, y2: 78, class: 'shaft' }, svg);
+    ball = el('circle', { cx: 70, cy: 78, r: 20, class: 'ball' }, svg);
+    eightButtons(svg, 170, 50, 22);
+  } else if (S.type === 'leverless') {
+    svg = el('svg', { width: 470, height: 170, viewBox: '0 0 470 170' }, dev);
+    // left hand: ← ↓ → on an arc, ↑ under the thumb
+    btn(svg, 'L', circle(30, 58, 20), '←'); btn(svg, 'D', circle(78, 48, 20), '↓'); btn(svg, 'R', circle(124, 66, 20), '→');
+    btn(svg, 'U', circle(176, 132, 24), '↑');
+    eightButtons(svg, 250, 46, 22);
+  } else {
+    svg = el('svg', { width: 400, height: 170, viewBox: '0 0 400 170' }, dev);
+    // shoulders: LT=E2, LB=E1 on the left; RT=HK, RB=HP on the right
+    const n = names();
+    btn(svg, 'a7', rrect(24, 6, 72, 22, 8), n[7], -1);
+    btn(svg, 'a6', rrect(24, 34, 72, 18, 7), n[6], -1);
+    btn(svg, 'a5', rrect(304, 6, 72, 22, 8), n[5], STRENGTH[5]);
+    btn(svg, 'a2', rrect(304, 34, 72, 18, 7), n[2], STRENGTH[2]);
+    // d-pad
+    const cx = 80, cy = 108, a = 17, l = 30;
+    btn(svg, 'U', poly([[cx - a, cy - a - l], [cx + a, cy - a - l], [cx + a, cy - a], [cx, cy - 4], [cx - a, cy - a]], [cx, cy - a - l / 2]), '↑');
+    btn(svg, 'D', poly([[cx - a, cy + a + l], [cx + a, cy + a + l], [cx + a, cy + a], [cx, cy + 4], [cx - a, cy + a]], [cx, cy + a + l / 2]), '↓');
+    btn(svg, 'L', poly([[cx - a - l, cy - a], [cx - a - l, cy + a], [cx - a, cy + a], [cx - 4, cy], [cx - a, cy - a]], [cx - a - l / 2, cy]), '←');
+    btn(svg, 'R', poly([[cx + a + l, cy - a], [cx + a + l, cy + a], [cx + a, cy + a], [cx + 4, cy], [cx + a, cy - a]], [cx + a + l / 2, cy]), '→');
+    // face buttons: □ left, △ top, ○ right, × bottom  (LP / MP / MK / LK in the classic layout)
+    const fx = 320, fy = 108, d = 32, r = 19;
+    btn(svg, 'a0', circle(fx - d, fy, r), n[0], STRENGTH[0]);
+    btn(svg, 'a1', circle(fx, fy - d, r), n[1], STRENGTH[1]);
+    btn(svg, 'a4', circle(fx + d, fy, r), n[4], STRENGTH[4]);
+    btn(svg, 'a3', circle(fx, fy + d, r), n[3], STRENGTH[3]);
+  }
+  applyStyle();
+}
+
+function applyStyle() {
+  const r = document.documentElement.style;
+  const n = parseInt(S.bg.slice(1), 16);
+  r.setProperty('--panel', `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${S.alpha})`);
+  r.setProperty('--on', S.on);
+  const w = document.getElementById('wrap');
+  w.classList.toggle('nobg', S.bgmode === 'none');
+  w.style.transform = 'scale(' + S.scale + ')';
+  document.getElementById('hist').style.display = S.history ? '' : 'none';
+}
+
+// ---------- reading the controller ----------
+// DirectInput sticks often report the lever as a hat on axis 9: -1 = up, then clockwise in steps of 2/7, >1 = centre.
+function hatDir(v) {
+  if (v === undefined || v > 1.05 || v < -1.05) return null;
+  const i = Math.round((v + 1) / (2 / 7));
+  return [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]][i] || null;
+}
+function readState() {
+  const pads = [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter(Boolean);
+  const use = S.pad === 'any' ? pads : pads.filter(p => p.index === +S.pad);
+  const pressed = new Set(); let x = 0, y = 0;
+  for (const p of use) {
+    p.buttons.forEach((b, i) => { if (b.pressed || b.value > 0.5) pressed.add(i); });
+    if (pressed.has(12)) y = -1; if (pressed.has(13)) y = 1; if (pressed.has(14)) x = -1; if (pressed.has(15)) x = 1;
+    if (!x && !y && p.axes.length >= 2) {
+      if (Math.abs(p.axes[0]) > 0.5) x = Math.sign(p.axes[0]);
+      if (Math.abs(p.axes[1]) > 0.5) y = Math.sign(p.axes[1]);
+    }
+    if (!x && !y && p.axes.length > 9) { const h = hatDir(p.axes[9]); if (h) [x, y] = h; }
+  }
+  return { pads, pressed, x, y };
+}
+
+// numpad notation: 7 8 9 / 4 5 6 / 1 2 3
+const ARROW = { 1: '↙', 2: '↓', 3: '↘', 4: '←', 5: '・', 6: '→', 7: '↖', 8: '↑', 9: '↗' };
+const numpad = (x, y) => 5 + x - 3 * y;
+
+let hist = [], lastKey = '', lastFrame = 0, frameCount = 0, waiting = null;
+function frame(t) {
+  const st = readState();
+  // assign mode in the designer: the next pressed button goes to the waiting slot
+  if (waiting !== null) {
+    const extra = [...st.pressed].filter(i => i < 12 || i > 15);
+    if (extra.length) { S.map[waiting] = extra[0]; waiting = null; renderMap(); updateUrl(); }
+  }
+  for (const k in parts) parts[k].forEach(e => e.classList.remove('on'));
+  const on = id => (parts[id] || []).forEach(e => e.classList.add('on'));
+  if (st.y < 0) on('U'); if (st.y > 0) on('D'); if (st.x < 0) on('L'); if (st.x > 0) on('R');
+  const acts = [];
+  S.map.forEach((b, a) => { if (st.pressed.has(b)) { on('a' + a); acts.push(a); } });
+  if (ball) {
+    const k = 28 * ((st.x && st.y) ? 0.75 : 1);
+    const bx = stickC[0] + st.x * k, by = stickC[1] + st.y * k;
+    ball.setAttribute('cx', bx); ball.setAttribute('cy', by);
+    shaft.setAttribute('x2', bx); shaft.setAttribute('y2', by);
+  }
+  // history: a new line every time the input changes; the top line counts frames (60 fps) held
+  if (S.history) {
+    const key = numpad(st.x, st.y) + ':' + acts.join(',');
+    const now = t || performance.now();
+    if (key !== lastKey) {
+      lastKey = key; frameCount = 1;
+      hist.unshift({ dir: numpad(st.x, st.y), acts, n: 1 });
+      hist.length = Math.min(hist.length, S.rows);
+    } else if (hist[0]) {
+      hist[0].n = Math.min(999, Math.round((now - lastFrame) / (1000 / 60)) + hist[0].n);
+    }
+    lastFrame = now;
+    drawHist();
+  }
+  const msg = document.getElementById('msg');
+  msg.textContent = st.pads.length ? '' : 'コントローラーのボタンを1回押すと表示されます';
+  if (SETUP) updatePadList(st.pads);
+  requestAnimationFrame(frame);
+}
+let lastHist = '';
+function drawHist() {
+  const n = names();
+  const html = hist.map(h => `<div class="row">${S.frames ? `<span class="n">${h.n}</span>` : ''}<span class="d">${h.dir === 5 && h.acts.length ? '' : ARROW[h.dir]}</span>` +
+    h.acts.map(a => `<span class="k ${S.color3 && STRENGTH[a] >= 0 ? 'c' + STRENGTH[a] : ''}">${esc(n[a])}</span>`).join('') + '</div>').join('');
+  if (html !== lastHist) { document.getElementById('hist').innerHTML = html; lastHist = html; }
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+// ---------- designer ----------
+function buildUrl() {
+  const p = new URLSearchParams();
+  p.set('type', S.type);
+  if (S.pad !== 'any') p.set('pad', S.pad);
+  if (S.history) { p.set('history', '1'); if (S.rows !== DEF.rows) p.set('rows', S.rows); if (!S.frames) p.set('frames', '0'); }
+  if (S.scale !== 1) p.set('scale', S.scale);
+  if (S.bgmode === 'none') p.set('bg', 'none'); else { if (S.bg !== DEF.bg) p.set('bg', S.bg.slice(1)); if (S.alpha !== DEF.alpha) p.set('alpha', S.alpha); }
+  if (S.on !== DEF.on) p.set('on', S.on.slice(1));
+  if (S.color3) p.set('color3', '1');
+  if (S.map.join() !== DEFMAP.join()) p.set('map', S.map.join(','));
+  if (S.names && S.names.join() !== DEFNAMES[S.type].join()) p.set('names', S.names.join(','));
+  return location.origin + location.pathname + '?' + p.toString().replace(/%2C/g, ',');
+}
+function updateUrl() { document.getElementById('url').textContent = buildUrl(); }
+function renderMap() {
+  const n = names();
+  document.getElementById('map').innerHTML = ACTIONS.map((a, i) => `<div class="slot"><input type="text" data-name="${i}" value="${esc(n[i])}" maxlength="4">
+    <span style="flex:1;color:#98a1b8">ボタン${S.map[i]}</span><button data-assign="${i}" class="${waiting === i ? 'wait' : ''}">${waiting === i ? '押して…' : '設定'}</button></div>`).join('');
+}
+let padIds = '';
+function updatePadList(pads) {
+  const ids = pads.map(p => p.index + ':' + p.id).join('|');
+  if (ids === padIds) return;
+  padIds = ids;
+  const sel = document.getElementById('padSel');
+  sel.innerHTML = '<option value="any">すべて</option>' + pads.map(p => `<option value="${p.index}">${p.index + 1}: ${esc(p.id.slice(0, 40))}</option>`).join('');
+  sel.value = S.pad;
+}
+function initSetup() {
+  document.body.classList.add('setup');
+  const box = document.getElementById('setup');
+  const sync = () => {
+    box.querySelectorAll('[data-k]').forEach(e => { const v = S[e.dataset.k]; if (e.type === 'checkbox') e.checked = !!v; else if (v !== undefined) e.value = v; });
+    renderMap(); updateUrl();
+  };
+  box.addEventListener('input', e => {
+    const t = e.target;
+    if (t.dataset.name !== undefined) {
+      S.names = names().slice(); S.names[+t.dataset.name] = t.value.slice(0, 4); build(); lastHist = ''; updateUrl(); return;
+    }
+    if (!t.dataset.k) return;
+    const k = t.dataset.k;
+    const prevType = S.type;
+    S[k] = t.type === 'checkbox' ? t.checked : (t.type === 'number' || t.type === 'range') ? +t.value : t.value;
+    if (k === 'type' && prevType !== S.type && S.names && S.names.join() === DEFNAMES[prevType].join()) S.names = null;
+    build(); lastHist = ''; sync();
+  });
+  box.addEventListener('click', e => {
+    const a = e.target.dataset.assign;
+    if (a !== undefined) { waiting = waiting === +a ? null : +a; renderMap(); }
+  });
+  document.getElementById('reset').onclick = () => { S.map = DEFMAP.slice(); S.names = null; build(); sync(); };
+  document.getElementById('copy').onclick = async () => {
+    const b = document.getElementById('copy'), text = buildUrl();
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
+      const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+      try { ok = document.execCommand('copy'); } catch (e2) { ok = false; } ta.remove();
+    }
+    b.textContent = ok ? 'コピーしました' : '上のURLを選んでコピー';
+    setTimeout(() => b.textContent = 'URLをコピー', 1800);
+  };
+  sync();
+}
+
+build();
+if (SETUP) initSetup();
+addEventListener('gamepadconnected', () => { padIds = ''; });
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
