@@ -1,0 +1,57 @@
+name: Native plugin
+
+on:
+  push:
+    paths:
+      - "native/**"
+      - "sf6tracker/vision.py"
+      - ".github/workflows/native-plugin.yaml"
+  workflow_dispatch:
+
+jobs:
+  scene-checks:
+    name: Colour checks match the Python tracker
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy opencv-python-headless
+      - run: python native/tests/compare_with_python.py
+
+  windows:
+    name: Build for Windows (OBS 31+)
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache OBS sources and deps
+        uses: actions/cache@v4
+        with:
+          path: native/.deps
+          key: obs-deps-${{ hashFiles('native/buildspec.json') }}
+      - name: Configure
+        run: cmake --preset windows-x64
+      - name: Build
+        run: cmake --build --preset windows-x64 --config RelWithDebInfo --parallel
+      - name: Install into a folder layout OBS understands
+        run: cmake --install build_x64 --prefix release --config RelWithDebInfo
+      - name: Add install notes
+        run: |
+          @"
+          SF6 Tracker (native prototype)  Made by WASURENE.
+
+          Install: copy the folder "sf6-tracker-native" into
+            C:\ProgramData\obs-studio\plugins\
+          so that you get
+            C:\ProgramData\obs-studio\plugins\sf6-tracker-native\bin\64bit\sf6-tracker-native.dll
+          then restart OBS. Right-click the SF6 game capture > Filters > + > "SF6 Tracker".
+          "@ | Set-Content -Encoding utf8 release/README.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sf6-tracker-native-windows
+          path: native/release
