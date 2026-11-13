@@ -9,7 +9,11 @@
   * { box-sizing:border-box; }
   html,body { margin:0; background:transparent; overflow:hidden; }
   body { font-family:"Segoe UI","Yu Gothic UI","Meiryo",system-ui,sans-serif; color:var(--ink); user-select:none; }
-  #wrap { display:inline-flex; gap:10px; align-items:flex-start; padding:8px; transform-origin:top left; }
+  #wrap { display:inline-flex; flex-direction:column; gap:4px; padding:8px; transform-origin:top left; }
+  #row { display:flex; gap:10px; align-items:flex-start; }
+  .credit { font-size:10px; letter-spacing:.08em; color:var(--dim); opacity:.85; text-align:right; padding:0 4px; white-space:nowrap; }
+  .credit b { font-weight:800; color:var(--ink); opacity:.9; }
+  #wrap.nobg .credit { text-shadow:0 0 4px #000, 0 1px 3px #000; }
   .box { background:var(--panel); border-radius:var(--radius); padding:14px; }
   #wrap.nobg .box { background:none; }
   svg { display:block; overflow:visible; }
@@ -51,7 +55,7 @@
 </style>
 </head>
 <body>
-<div id="wrap"><div class="box" id="dev"></div><div class="box" id="hist" style="display:none"></div></div>
+<div id="wrap"><div id="row"><div class="box" id="dev"></div><div class="box" id="hist" style="display:none"></div></div><div class="credit">powered by <b>WASURENE.</b></div></div>
 <div id="msg"></div>
 
 <div id="setup">
