@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -121,6 +122,11 @@ def make_handler(app):
                     return self.send({"ok": app.store.delete(mid)})
                 r = app.store.update(mid, **data)
                 return self.send(app.decorate(r)) if r else self.send({"error": "not found"}, code=404)
+            if p == "/api/shutdown":  # used by the OBS script when OBS closes
+                self.send({"ok": True})
+                app.running = False
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
             if p == "/api/session/new":
                 return self.send({"session": app.store.new_session()})
             if p == "/api/test":
