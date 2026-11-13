@@ -1,4 +1,5 @@
 numpy
 opencv-python-headless
 obsws-python>=1.7
-rapidocr-onnxruntime>=1.2.3
+rapidocr-onnxruntime==1.4.4; python_version < "3.13"
+rapidocr-onnxruntime>=1.2.3; python_version >= "3.13"

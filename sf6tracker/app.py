@@ -79,10 +79,13 @@ class App:
             if self.is_file and getattr(self.capture, "done", False):
                 time.sleep(1.0)
                 continue
-            wait = 0.05 if self.is_file else max(0.1, float(self.cfg["capture"]["interval"]) - (time.time() - t0))
+            # Never work more than a third of the time, however slow one look at the screen gets.
+            busy = time.time() - t0
+            wait = 0.05 if self.is_file else max(2.0 * busy, float(self.cfg["capture"]["interval"]) - busy, 0.1)
             time.sleep(wait)
 
     def start(self):
+        vision.lower_priority()
         threading.Thread(target=self.loop, daemon=True).start()
 
     # ---- data for the web pages ----------------------------------------------
@@ -143,7 +146,7 @@ class App:
         for name, roi in self.cfg["rois"].items():
             if roi:
                 out["texts"][name] = [it["text"] for it in ctx.texts(roi)]
-        out["all_texts"] = [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in it.items()} for it in ctx.texts(None)]
+        out["all_texts"] = [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in it.items()} for it in ctx.texts(None, fine=True)]
         return out
 
     def add_template(self, signal, roi, seq=None):
