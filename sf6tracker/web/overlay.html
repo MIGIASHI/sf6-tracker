@@ -176,7 +176,17 @@ function render(s) {
     lastTop = ms.length ? ms[0].id : 0;
   }
   root.innerHTML = h;
+  if (SETUP) fitPreview();
 }
+
+// In the designer the preview may be wider than the window (e.g. in a narrow OBS dock): shrink only the preview.
+function fitPreview() {
+  root.style.transform = 'scale(' + S.scale + ')';
+  const w = root.scrollWidth * S.scale;
+  const k = w > innerWidth - 4 ? (innerWidth - 4) / root.scrollWidth : S.scale;
+  root.style.transform = 'scale(' + k + ')';
+}
+addEventListener('resize', () => { if (SETUP) fitPreview(); });
 
 function demo() {
   const names = ['ジュリ', 'ケン', '春麗', 'キャミィ', '豪鬼', 'ガイル', 'JP', 'ルーク', 'エド', '舞'];
@@ -241,7 +251,15 @@ function initSetup() {
   });
   document.getElementById('copy').onclick = async () => {
     const b = document.getElementById('copy');
-    try { await navigator.clipboard.writeText(buildUrl()); b.textContent = 'コピーしました'; } catch (e) { b.textContent = '上のURLを選んでコピー'; }
+    const text = buildUrl();
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
+      // OBS docks may block the clipboard API; fall back to a hidden textarea
+      const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select();
+      try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+      t.remove();
+    }
+    b.textContent = ok ? 'コピーしました' : '上のURLを選んでコピー';
     setTimeout(() => b.textContent = 'URLをコピー', 1800);
   };
   sync();
