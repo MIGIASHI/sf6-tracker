@@ -60,7 +60,8 @@ class ObsCapture:
             self.close()
         return out
 
-    def grab(self):
+    def grab(self, width=None):
+        """One picture of the source. width: a smaller one for the cheap checks (default: capture.width)."""
         cl = self._connect()
         if cl is None:
             return None
@@ -69,8 +70,10 @@ class ObsCapture:
             self.status = "OBSに接続中。操作パネルの「設定」でSF6のソースを選んでください"
             return None
         try:
-            w = int(self.cfg["capture"]["width"])
-            resp = cl.get_source_screenshot(source, "jpg", w, w, 85)
+            w = int(width or self.cfg["capture"]["width"])
+            # width only: OBS keeps the picture's own shape (asking for w x w squashes 16:9 into a square)
+            resp = cl.send("GetSourceScreenshot", {"sourceName": source, "imageFormat": "jpg", "imageWidth": w,
+                                                   "imageCompressionQuality": 85})
             data = base64.b64decode(resp.image_data.split(",", 1)[1])
             frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
             if frame is not None:
@@ -84,6 +87,10 @@ class ObsCapture:
             return None
 
 
+    def full(self):
+        return self.grab()
+
+
 class FileCapture:
     """Plays a recorded video or a folder of screenshots instead of OBS (for tuning and tests)."""
 
@@ -95,6 +102,7 @@ class FileCapture:
         self.video = None
         self.files = None
         self.done = False
+        self.current = None
         if os.path.isdir(path):
             self.files = sorted(f for f in glob.glob(os.path.join(path, "*")) if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")))
         elif path.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
@@ -105,7 +113,10 @@ class FileCapture:
     def sources(self):
         return []
 
-    def grab(self):
+    def full(self):
+        return self.current
+
+    def grab(self, width=None):
         frame = None
         if self.video is not None:
             self.video.set(cv2.CAP_PROP_POS_MSEC, self.t * 1000)
@@ -123,4 +134,8 @@ class FileCapture:
         if frame.shape[1] > self.width:
             h = int(round(frame.shape[0] * self.width / frame.shape[1]))
             frame = cv2.resize(frame, (self.width, h), interpolation=cv2.INTER_AREA)
+        self.current = frame
+        if width and frame.shape[1] > width:
+            h = int(round(frame.shape[0] * float(width) / frame.shape[1]))
+            return cv2.resize(frame, (int(width), h), interpolation=cv2.INTER_AREA)
         return frame

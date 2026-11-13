@@ -65,6 +65,7 @@ def run(det, frames, t):
 def test_flow():
     d = tempfile.mkdtemp()
     cfg, store = Config(d), Store(d)
+    cfg.update({"detect": {"layout": "generic"}})  # drawn frames, not the real SF6 layout
     det = Detector(cfg, store, Library(d))
     t = [1000.0]
     ev = run(det, [play_frame()] * 2 + [vs_frame("RYU", "JURI")] * 3 + [play_frame()] * 5
@@ -96,6 +97,7 @@ def test_flow():
 def test_roi_and_unknown_character():
     d = tempfile.mkdtemp()
     cfg, store = Config(d), Store(d)
+    cfg.update({"detect": {"layout": "generic"}})  # drawn frames, not the real SF6 layout
     cfg.update({"player": {"side": "p2"},
                 "rois": {"p1_char": [0.05, 0.75, 0.4, 0.15], "p2_char": [0.6, 0.75, 0.4, 0.15],
                          "rating": [0.08, 0.5, 0.3, 0.12]}})
@@ -119,6 +121,7 @@ def test_roi_and_unknown_character():
 def test_player_name_decides_side():
     d = tempfile.mkdtemp()
     cfg, store = Config(d), Store(d)
+    cfg.update({"detect": {"layout": "generic"}})  # drawn frames, not the real SF6 layout
     cfg.update({"player": {"names": ["MIGI_4080"], "side": "p1"}})
     det = Detector(cfg, store, Library(d))
     t = [9000.0]
