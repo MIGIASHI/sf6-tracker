@@ -34,6 +34,40 @@ def similarity(a, b):
     return float((ga * gb).sum() / den) if den > 1e-6 else 0.0
 
 
+def _limit_onnx_threads(threads=1):
+    """Keep the OCR on one quiet thread. By default it grabs every CPU core, which makes the game stutter."""
+    try:
+        import onnxruntime as ort
+    except Exception:
+        return
+    real = ort.InferenceSession
+    if getattr(real, "_sf6_limited", False):
+        return
+
+    def limited(path_or_bytes, sess_options=None, *args, **kw):
+        so = sess_options or ort.SessionOptions()
+        so.intra_op_num_threads = threads
+        so.inter_op_num_threads = 1
+        try:
+            so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        except Exception:
+            pass
+        return real(path_or_bytes, so, *args, **kw)
+
+    limited._sf6_limited = True
+    ort.InferenceSession = limited
+
+
+def lower_priority():
+    """Windows: run below normal priority so the game and OBS always get the CPU first."""
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        k.SetPriorityClass(k.GetCurrentProcess(), 0x00004000)  # BELOW_NORMAL_PRIORITY_CLASS
+    except Exception:
+        pass
+
+
 class Ocr:
     """Lazy wrapper around RapidOCR. Returns items with positions as fractions of the full frame."""
 
@@ -50,46 +84,97 @@ class Ocr:
                     onnxruntime.disable_telemetry_events()
                 except Exception:
                     pass
+                _limit_onnx_threads()
                 from rapidocr_onnxruntime import RapidOCR
-                self._engine = RapidOCR()
+                try:  # newer versions: let our own resizing decide how big the search picture is
+                    self._engine = RapidOCR(det_limit_side_len=1600, det_limit_type="max")
+                except Exception:
+                    self._engine = RapidOCR()
             except Exception as e:  # missing package or model
                 self.error = "OCR を読み込めません: %s" % e
         return self._engine
 
-    def read(self, frame, roi=None):
+    def read(self, frame, roi=None, det_width=None, top=None):
+        """Read text in a frame (or one ROI of it).
+
+        det_width: look for text on a copy shrunk to this width (cheap); the letters themselves
+                   are still read from the full-size picture.
+        top:       read only the N tallest pieces of text.
+        """
         with self._lock:
             engine = self._get()
             if engine is None:
                 return []
             img = crop(frame, roi)
             ih, iw = img.shape[:2]
-            scale = 1.0
             if ih < 240:  # small crops read better enlarged
-                scale = min(4.0, 240.0 / ih)
-                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-            pad = 16
-            img = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
+                k = min(4.0, 240.0 / ih)
+                img = cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC)
             try:
-                out = engine(img)
+                rows = self._staged(engine, img, det_width, top) if self._can_stage(engine) else self._plain(engine, img)
             except Exception as e:
                 self.error = "OCR エラー: %s" % e
                 return []
-            res = out[0] if isinstance(out, tuple) else getattr(out, "boxes", None) and list(zip(out.boxes, out.txts, out.scores))
-            items = []
+            h, w = img.shape[:2]
             rx, ry, rw, rh = roi if roi else (0.0, 0.0, 1.0, 1.0)
-            for row in res or []:
-                box, text, conf = row[0], row[1], float(row[2])
-                xs = [(p[0] - pad) / scale / iw for p in box]
-                ys = [(p[1] - pad) / scale / ih for p in box]
-                items.append({
-                    "text": str(text), "conf": round(conf, 3),
-                    "x": rx + min(xs) * rw, "y": ry + min(ys) * rh,
-                    "w": (max(xs) - min(xs)) * rw, "h": (max(ys) - min(ys)) * rh,
-                })
-            for it in items:
+            items = []
+            for (x0, y0, x1, y1), text, conf in rows:
+                it = {"text": str(text), "conf": round(float(conf), 3),
+                      "x": rx + x0 / w * rw, "y": ry + y0 / h * rh, "w": (x1 - x0) / w * rw, "h": (y1 - y0) / h * rh}
                 it["cx"] = it["x"] + it["w"] / 2
                 it["cy"] = it["y"] + it["h"] / 2
+                items.append(it)
             return items
+
+    @staticmethod
+    def _can_stage(engine):
+        return hasattr(engine, "text_det") and hasattr(engine, "text_rec")
+
+    @staticmethod
+    def _plain(engine, img):
+        """Old RapidOCR versions: one call does everything."""
+        pad = 16
+        big = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
+        try:
+            out = engine(big, use_cls=False)
+        except TypeError:
+            out = engine(big)
+        rows = []
+        for row in (out[0] if isinstance(out, tuple) else out) or []:
+            xs = [p[0] - pad for p in row[0]]
+            ys = [p[1] - pad for p in row[0]]
+            rows.append(((min(xs), min(ys), max(xs), max(ys)), row[1], row[2]))
+        return rows
+
+    @staticmethod
+    def _staged(engine, img, det_width, top):
+        """Find text on a small copy, keep the biggest pieces, read those from the full-size picture."""
+        h, w = img.shape[:2]
+        k = min(1.0, float(det_width) / w) if det_width else 1.0
+        small = cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1.0 else img
+        pad = 16
+        small = cv2.copyMakeBorder(small, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
+        out = engine(small, use_det=True, use_cls=False, use_rec=False)
+        boxes = []
+        for b in (out[0] if isinstance(out, tuple) else out) or []:
+            pts = b[0] if len(b) and isinstance(b[0][0], (list, tuple)) and len(b) != 4 else b
+            xs = [(p[0] - pad) / k for p in pts]
+            ys = [(p[1] - pad) / k for p in pts]
+            x0, y0, x1, y1 = max(0, min(xs)), max(0, min(ys)), min(w, max(xs)), min(h, max(ys))
+            if x1 - x0 >= 4 and y1 - y0 >= 4:
+                boxes.append((x0, y0, x1, y1))
+        boxes.sort(key=lambda b: b[1] - b[3])  # tallest first
+        if top:
+            boxes = boxes[:top]
+        rows = []
+        for x0, y0, x1, y1 in boxes:
+            m = int((y1 - y0) * 0.12) + 2
+            piece = img[max(0, int(y0) - m):int(y1) + m, max(0, int(x0) - m):int(x1) + m]
+            res = engine(piece, use_det=False, use_cls=False, use_rec=True)
+            res = res[0] if isinstance(res, tuple) else res
+            if res and res[0][0] and float(res[0][1]) >= 0.5:
+                rows.append(((x0, y0, x1, y1), res[0][0], res[0][1]))
+        return rows
 
 
 def tokens(text):

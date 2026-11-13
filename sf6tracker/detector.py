@@ -79,15 +79,32 @@ class Library:
 class FrameContext:
     """One frame plus cached OCR results, so each ROI is read at most once."""
 
-    def __init__(self, frame, ocr):
+    def __init__(self, frame, ocr, previous=None):
         self.frame = frame
         self.ocr = ocr
         self._texts = {}
+        g = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (48, 27), interpolation=cv2.INTER_AREA)
+        self.thumb = g.astype("int16")
+        # Same picture as the last tick (menus, paused screens): reuse what was read, no OCR needed.
+        if previous is not None and previous.thumb.shape == self.thumb.shape \
+                and int(abs(previous.thumb - self.thumb).max()) <= 4:
+            self._texts = previous._texts
 
-    def texts(self, roi):
-        key = tuple(roi) if roi else None
+    def texts(self, roi, fine=False):
+        """Text inside an ROI, or on the whole frame when roi is None.
+
+        Whole-frame reads are the expensive part, so they come in two grades: a quick one that
+        only catches big text (run on every tick) and a fine one for small text such as names
+        and the rating (run only on VS and result screens).
+        """
+        key = tuple(roi) if roi else ("fine" if fine else "quick")
         if key not in self._texts:
-            self._texts[key] = self.ocr.read(self.frame, roi)
+            if roi:
+                self._texts[key] = self.ocr.read(self.frame, roi, top=12)
+            elif fine:
+                self._texts[key] = self.ocr.read(self.frame, None, det_width=1280, top=40)
+            else:
+                self._texts[key] = self.ocr.read(self.frame, None, det_width=640, top=16)
         return self._texts[key]
 
 
@@ -104,6 +121,7 @@ class Detector:
         self.side_seen = 0.0
         self.last_side = None
         self.debug = {}
+        self._last_ctx = None
 
     # ---- single-frame checks -------------------------------------------------
     def roi(self, name):
@@ -155,7 +173,7 @@ class Detector:
         d = self.cfg["detect"]
         roi = self.roi("rating")
         label = self.cfg["player"].get("rating_label", "MR")
-        items = ctx.texts(roi)
+        items = ctx.texts(roi, fine=True)
         if roi:  # a tight ROI needs no label next to the number
             v = vision.find_rating(items, label, d["rating_min"], d["rating_max"])
             return v if v is not None else vision.find_rating(items, "", d["rating_min"], d["rating_max"])
@@ -177,7 +195,7 @@ class Detector:
                 if roi and any(vision.name_matches(it["text"], names) for it in ctx.texts(roi)):
                     found.add(s)
         else:
-            for it in ctx.texts(None):
+            for it in ctx.texts(None, fine=True):
                 if vision.name_matches(it["text"], names):
                     found.add("p1" if it["cx"] < 0.5 else "p2")
         return found.pop() if len(found) == 1 else None
@@ -201,7 +219,9 @@ class Detector:
     def process(self, frame, now=None):
         now = time.time() if now is None else now
         d = self.cfg["detect"]
-        ctx = FrameContext(frame, self.ocr)
+        ctx = FrameContext(frame, self.ocr, self._last_ctx)
+        self._last_ctx = ctx
+        ctx.frame = frame
 
         vs, vs_info, _ = self.check_signal("vs", ctx)
         win, win_info, win_hits = self.check_signal("win", ctx)
@@ -217,7 +237,7 @@ class Detector:
         if (vs or named or win or lose) and not self.active:
             if now - self.side_seen > (60 if vs else 900):  # a fresh VS screen starts a new match
                 self.side_votes.clear()
-            seen = self.find_side(ctx)
+            seen = self.find_side(ctx) if sum(self.side_votes.values()) < 3 else None
             if seen:
                 self.side_votes[seen] += 1
                 self.side_seen = now
@@ -250,7 +270,8 @@ class Detector:
             a = self.active
             if result:
                 a["seen"] = now
-            v = self.read_rating(ctx, a["side"]) if (result or now - a["seen"] < 8) else None
+            # the rating settles within seconds; stop the fine reads after that
+            v = self.read_rating(ctx, a["side"]) if (now - a["start"] < 20 and (result or now - a["seen"] < 8)) else None
             if v is not None:
                 a["readings"].append(v)
                 self._apply_rating(a)

@@ -9,7 +9,7 @@ import threading
 # ROI = [x, y, w, h] as fractions of the frame (0-1). None = search the whole frame.
 DEFAULT = {
     "obs": {"host": "127.0.0.1", "port": 4455, "password": "", "source": ""},
-    "capture": {"width": 1280, "interval": 1.0},
+    "capture": {"width": 1280, "interval": 1.5},
     "server": {"port": 17860},
     # names: my player name(s) as shown in game -> decides each match whether I am 1P or 2P.
     # chars: characters I use (second clue). side: used only when neither clue works.
