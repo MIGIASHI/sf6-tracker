@@ -4,19 +4,23 @@
 <meta charset="utf-8">
 <title>SF6 Tracker Overlay</title>
 <style>
-  :root { --win:#2fe6a4; --lose:#ff5c7c; --ink:#f4f6fb; --dim:#9aa3b8; --panel:rgba(14,17,28,.82); --line:rgba(255,255,255,.09); }
+  :root { --win:#2fe6a4; --lose:#ff5c7c; --ink:#f4f6fb; --dim:#9aa3b8; --panel:rgba(14,17,28,.82); --line:rgba(255,255,255,.09); --radius:12px; }
+  :root.light { --ink:#161a26; --dim:#5d667c; --line:rgba(0,0,0,.10); --win:#0fae78; --lose:#e23a5e; }
   * { box-sizing:border-box; }
   html,body { margin:0; background:transparent; overflow:hidden; }
   body { font-family:"Segoe UI","Yu Gothic UI","Meiryo",system-ui,sans-serif; color:var(--ink); }
   #root { display:flex; flex-direction:column; gap:8px; width:340px; padding:8px; transform-origin:top left; }
   #root.right { margin-left:auto; transform-origin:top right; }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
-  .cap { font-size:11px; letter-spacing:.14em; color:var(--dim); font-weight:700; text-transform:uppercase; }
-  .score { display:flex; align-items:flex-end; justify-content:space-between; margin-top:2px; }
-  .wl { font-size:38px; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; }
+  /* no background: keep the text readable on top of the game */
+  #root.nobg .panel { background:none; border-color:transparent; text-shadow:0 0 4px #000, 0 1px 3px #000, 0 0 10px rgba(0,0,0,.7); }
+  :root.light #root.nobg .panel { text-shadow:0 0 4px #fff, 0 1px 3px #fff, 0 0 10px rgba(255,255,255,.7); }
+  .cap { font-size:11px; letter-spacing:.14em; color:var(--dim); font-weight:700; text-transform:uppercase; white-space:nowrap; }
+  .score { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-top:2px; }
+  .wl { font-size:38px; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .wl .w { color:var(--win); } .wl .l { color:var(--lose); } .wl small { font-size:18px; font-weight:700; margin:0 2px 0 1px; }
   .wl .sep { color:var(--dim); margin:0 8px; font-weight:400; }
-  .side { text-align:right; font-size:13px; color:var(--dim); line-height:1.5; }
+  .side { text-align:right; font-size:13px; color:var(--dim); line-height:1.5; white-space:nowrap; }
   .side b { color:var(--ink); font-size:18px; font-variant-numeric:tabular-nums; }
   .streak.win { color:var(--win); } .streak.lose { color:var(--lose); }
   .bar { height:4px; border-radius:2px; background:var(--lose); margin-top:10px; overflow:hidden; }
@@ -32,37 +36,107 @@
   .row:first-child { border-top:0; }
   .row.new { animation:pop .5s ease-out; }
   @keyframes pop { from { opacity:0; transform:translateX(-12px); } to { opacity:1; transform:none; } }
-  .badge { flex:none; width:22px; height:22px; border-radius:6px; font-size:13px; font-weight:800; display:grid; place-items:center; color:#0c0f18; }
+  .badge { flex:none; width:22px; height:22px; border-radius:6px; font-size:13px; font-weight:800; display:grid; place-items:center; color:#0c0f18; text-shadow:none; }
   .badge.win { background:var(--win); } .badge.lose { background:var(--lose); }
   .names { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .names .vs { color:var(--dim); font-size:11px; margin:0 5px; }
   .names .me { color:var(--dim); }
   .d { flex:none; font-weight:700; font-variant-numeric:tabular-nums; font-size:14px; }
   .empty-note { color:var(--dim); font-size:13px; padding:6px 0 2px; }
+
+  /* side-by-side style: one low strip, good for the top or bottom edge of the stream */
+  #root.wide { flex-direction:row; align-items:stretch; width:max-content; max-width:none; }
+  #root.wide .panel { padding:9px 14px; display:flex; flex-direction:column; justify-content:center; }
+  #root.wide .p-score { min-width:250px; }
+  #root.wide .bar { margin-top:7px; }
+  #root.wide .p-rating { flex-direction:row; align-items:center; gap:14px; }
+  #root.wide svg.spark { width:150px; height:50px; margin:0; }
+  #root.wide .rows { display:flex; gap:6px; margin-top:5px; }
+  #root.wide .row { border:1px solid var(--line); border-radius:8px; padding:4px 8px; gap:6px; font-size:14px; }
+  #root.wide .row.new { animation:popup .5s ease-out; }
+  @keyframes popup { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+  #root.wide .names { overflow:visible; }
+
+  /* ?setup=1 : a little designer shown under the preview (never shown in OBS unless you ask for it) */
+  #setup { display:none; position:fixed; left:0; right:0; bottom:0; background:#161a26; color:#eef1f8; border-top:1px solid #2c3347; padding:12px 16px; font-size:13px; }
+  body.setup { background:repeating-conic-gradient(#4a556e 0 25%, #58647f 0 50%) 0 0/28px 28px; overflow:auto; padding-bottom:330px; min-height:100vh; }
+  #setup { max-height:60vh; overflow:auto; }
+  body.setup #setup { display:block; }
+  #setup .g { display:flex; flex-wrap:wrap; gap:8px 18px; align-items:center; }
+  #setup label { display:inline-flex; gap:5px; align-items:center; white-space:nowrap; }
+  #setup select, #setup input[type=number] { background:#252b3d; color:#eef1f8; border:1px solid #2c3347; border-radius:5px; padding:3px 6px; font:inherit; }
+  #setup input[type=number] { width:60px; }
+  #setup .url { margin-top:10px; display:flex; gap:8px; align-items:center; }
+  #setup code { flex:1; background:#0d1018; padding:6px 8px; border-radius:5px; word-break:break-all; user-select:all; }
+  #setup button { background:#5aa2ff; color:#08101f; border:0; border-radius:5px; padding:6px 12px; font:inherit; font-weight:700; cursor:pointer; }
 </style>
 </head>
 <body>
 <div id="root"></div>
+<div id="setup">
+  <div class="g">
+    <label>並べ方 <select data-k="layout"><option value="column">縦</option><option value="row">横並び</option></select></label>
+    <label><input type="checkbox" data-p="score">戦績</label>
+    <label><input type="checkbox" data-p="rating">レート</label>
+    <label><input type="checkbox" data-p="history">履歴</label>
+    <label>範囲 <select data-k="scope"><option value="session">この配信</option><option value="today">今日</option><option value="all">通算</option></select></label>
+    <label>履歴の数 <input type="number" data-k="limit" min="1" max="30"></label>
+    <label>大きさ <input type="number" data-k="scale" min="0.5" max="3" step="0.1"></label>
+    <label>寄せ <select data-k="align"><option value="left">左</option><option value="right">右</option></select></label>
+    <label><input type="checkbox" data-k="me">自キャラも表示</label>
+  </div>
+  <div class="g" style="margin-top:8px">
+    <label>背景 <select data-k="bgmode"><option value="color">色</option><option value="none">なし（文字だけ）</option></select></label>
+    <label>背景色 <input type="color" data-k="bg"></label>
+    <label>濃さ <input type="range" data-k="alpha" min="0" max="1" step="0.05"></label>
+    <label>文字 <select data-k="theme"><option value="dark">白文字</option><option value="light">黒文字</option></select></label>
+    <label>角の丸み <input type="number" data-k="radius" min="0" max="30"></label>
+    <label><input type="checkbox" data-k="demo">見本データで表示</label>
+  </div>
+  <div class="url"><code id="url"></code><button id="copy">URLをコピー</button></div>
+  <div style="margin-top:6px;color:#98a1b8">この URL を OBS のブラウザソースに貼ると、上の見た目で表示されます。</div>
+  <details style="margin-top:8px"><summary style="cursor:pointer">部品をバラバラの場所に置きたいとき</summary>
+    <div style="margin:6px 0;color:#98a1b8">部品ごとにブラウザソースを作って下の URL を貼ると、OBS の画面上で 1 つずつ好きな位置・大きさに動かせます。</div>
+    <div id="parts"></div></details>
+</div>
 <script>
-// URL options: ?panels=score,rating,history  &limit=8  &scale=1.2  &scope=session|today|all  &align=right  &me=0  &demo=1
+// URL options (all optional):
+//   layout=row|column   panels=score,rating,history   limit=8   scale=1.2   scope=session|today|all
+//   align=right   me=0   bg=1b2030 (colour) | bg=none   alpha=0.82   theme=light   radius=12   demo=1   setup=1
 const Q = new URLSearchParams(location.search);
-const panels = (Q.get('panels') || 'score,rating,history').split(',');
-const limit = +(Q.get('limit') || 8);
-const scope = Q.get('scope') || 'session';
-const showMe = Q.get('me') !== '0';
+const DEF = { layout: 'column', panels: 'score,rating,history', limit: 8, scale: 1, scope: 'session', align: 'left', me: true,
+  bgmode: 'color', bg: '#0e111c', alpha: 0.82, theme: 'dark', radius: 12, demo: false };
+const S = Object.assign({}, DEF);
+for (const k of ['layout', 'panels', 'scope', 'align', 'theme']) if (Q.get(k)) S[k] = Q.get(k);
+for (const k of ['limit', 'scale', 'alpha', 'radius']) if (Q.get(k) !== null && !isNaN(+Q.get(k))) S[k] = +Q.get(k);
+if (Q.get('me') === '0') S.me = false;
+if (Q.get('demo')) S.demo = true;
+if (Q.get('bg') === 'none') S.bgmode = 'none';
+else if (/^#?[0-9a-f]{6}$/i.test(Q.get('bg') || '')) S.bg = '#' + Q.get('bg').replace('#', '').toLowerCase();
+if (S.theme === 'light' && !Q.get('bg')) S.bg = '#ffffff';
+const SETUP = !!Q.get('setup');
+
 const root = document.getElementById('root');
-root.style.transform = 'scale(' + (+(Q.get('scale') || 1)) + ')';
-if (Q.get('align') === 'right') root.classList.add('right');
 const SCOPE = { session: 'この配信', today: '今日', all: '通算' };
-let lastTop = null, lastJson = '';
+let lastTop = null, lastJson = '', lastState = null;
 
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function sign(n) { return (n > 0 ? '+' : n < 0 ? '−' : '±') + Math.abs(n); }
 function cls(n) { return n > 0 ? 'up' : n < 0 ? 'down' : 'flat'; }
 
-function spark(series) {
+function applyStyle() {
+  const wide = S.layout === 'row';
+  root.className = (wide ? 'wide ' : '') + (S.align === 'right' ? 'right ' : '') + (S.bgmode === 'none' ? 'nobg' : '');
+  root.style.transform = 'scale(' + S.scale + ')';
+  document.documentElement.classList.toggle('light', S.theme === 'light');
+  const n = parseInt(S.bg.slice(1), 16);
+  document.documentElement.style.setProperty('--panel', `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${S.alpha})`);
+  document.documentElement.style.setProperty('--radius', S.radius + 'px');
+}
+
+function spark(series, W, H) {
   if (series.length < 2) return '';
-  const W = 310, H = 54, P = 5;
+  const P = 5;
   const lo = Math.min(...series), hi = Math.max(...series), span = (hi - lo) || 1;
   const pts = series.map((v, i) => [P + i * (W - 2 * P) / (series.length - 1), H - P - (v - lo) * (H - 2 * P) / span]);
   const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
@@ -70,30 +144,33 @@ function spark(series) {
   const base = H - P - (series[0] - lo) * (H - 2 * P) / span;
   const end = pts[pts.length - 1];
   return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-    <line x1="${P}" x2="${W - P}" y1="${base}" y2="${base}" stroke="rgba(255,255,255,.22)" stroke-dasharray="3 4"/>
+    <line x1="${P}" x2="${W - P}" y1="${base}" y2="${base}" stroke="var(--dim)" stroke-opacity=".45" stroke-dasharray="3 4"/>
     <path d="${line}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
     <circle cx="${end[0]}" cy="${end[1]}" r="3.4" fill="${col}"/></svg>`;
 }
 
 function render(s) {
+  lastState = s;
+  const panels = S.panels.split(',');
+  const wide = S.layout === 'row';
   let h = '';
   if (panels.includes('score')) {
     const st = s.streak;
-    h += `<div class="panel"><div class="cap">${SCOPE[s.scope] || ''}の戦績</div>
+    h += `<div class="panel p-score"><div class="cap">${SCOPE[s.scope] || ''}の戦績</div>
       <div class="score"><div class="wl"><span class="w">${s.wins}<small>W</small></span><span class="sep">-</span><span class="l">${s.losses}<small>L</small></span></div>
       <div class="side"><div>勝率 <b>${s.rate == null ? '--' : s.rate.toFixed(1)}</b>%</div>
       ${Math.abs(st) >= 2 ? `<div class="streak ${st > 0 ? 'win' : 'lose'}">${Math.abs(st)}${st > 0 ? '連勝中' : '連敗中'}</div>` : ''}</div></div>
       <div class="bar ${s.total ? '' : 'empty'}"><i style="width:${s.total ? 100 * s.wins / s.total : 0}%"></i></div></div>`;
   }
   if (panels.includes('rating')) {
-    h += `<div class="panel"><div class="cap">${esc(s.label)}</div><div class="mr"><span class="val">${s.rating == null ? '----' : s.rating}</span>
-      ${s.rating_diff == null ? '' : `<span class="diff ${cls(s.rating_diff)}">${sign(s.rating_diff)}</span>`}</div>${spark(s.series || [])}</div>`;
+    h += `<div class="panel p-rating"><div><div class="cap">${esc(s.label)}</div><div class="mr"><span class="val">${s.rating == null ? '----' : s.rating}</span>
+      ${s.rating_diff == null ? '' : `<span class="diff ${cls(s.rating_diff)}">${sign(s.rating_diff)}</span>`}</div></div>${wide ? spark(s.series || [], 150, 50) : spark(s.series || [], 310, 54)}</div>`;
   }
   if (panels.includes('history')) {
-    const ms = s.matches.slice(0, limit);
-    h += `<div class="panel"><div class="cap">対戦履歴</div><div class="rows">` + (ms.length ? ms.map((m, i) =>
+    const ms = s.matches.slice(0, S.limit);
+    h += `<div class="panel p-history"><div class="cap">対戦履歴</div><div class="rows">` + (ms.length ? ms.map((m, i) =>
       `<div class="row ${i === 0 && lastTop !== null && m.id !== lastTop ? 'new' : ''}"><span class="badge ${m.result}">${m.result === 'win' ? 'W' : 'L'}</span>
-       <span class="names">${showMe && m.my_char ? `<span class="me">${esc(m.my_name)}</span><span class="vs">vs</span>` : ''}${esc(m.opp_name)}</span>
+       <span class="names">${S.me && !wide && m.my_char ? `<span class="me">${esc(m.my_name)}</span><span class="vs">vs</span>` : ''}${esc(m.opp_name)}</span>
        ${m.delta == null ? '' : `<span class="d ${cls(m.delta)}">${sign(m.delta)}</span>`}</div>`).join('')
       : `<div class="empty-note">まだ対戦がありません</div>`) + `</div></div>`;
     lastTop = ms.length ? ms[0].id : 0;
@@ -108,17 +185,70 @@ function demo() {
   res.forEach((w, i) => { const d = w ? 6 + (i * 3) % 5 : -(6 + (i * 2) % 5); r += d; series.push(r);
     matches.unshift({ id: i + 1, result: w ? 'win' : 'lose', my_char: 'ryu', my_name: 'リュウ', opp_name: names[i % names.length], delta: d }); });
   const wins = res.filter(Boolean).length;
-  return { scope, label: 'MR', wins, losses: res.length - wins, total: res.length, rate: 100 * wins / res.length, streak: 2,
+  return { scope: S.scope, label: 'MR', wins, losses: res.length - wins, total: res.length, rate: 100 * wins / res.length, streak: 2,
     rating: r, rating_diff: r - series[0], series, matches };
 }
 
 async function tick() {
   try {
-    const s = Q.get('demo') ? demo() : await (await fetch('/api/state?scope=' + scope, { cache: 'no-store' })).json();
+    const s = S.demo ? demo() : await (await fetch('/api/state?scope=' + S.scope, { cache: 'no-store' })).json();
     const j = JSON.stringify(s);
     if (j !== lastJson) { lastJson = j; render(s); }
   } catch (e) { /* tracker not running: keep the last picture */ }
 }
+
+// ---------- designer ----------
+function buildUrl(only) {
+  const p = new URLSearchParams();
+  if (S.layout !== DEF.layout) p.set('layout', S.layout);
+  if (only) p.set('panels', only);
+  else if (S.panels !== DEF.panels) p.set('panels', S.panels);
+  if (S.scope !== DEF.scope) p.set('scope', S.scope);
+  if (S.limit !== DEF.limit) p.set('limit', S.limit);
+  if (S.scale !== DEF.scale) p.set('scale', S.scale);
+  if (S.align !== DEF.align) p.set('align', S.align);
+  if (!S.me) p.set('me', '0');
+  if (S.theme !== DEF.theme) p.set('theme', S.theme);
+  if (S.bgmode === 'none') p.set('bg', 'none');
+  else {
+    if (S.bg !== (S.theme === 'light' ? '#ffffff' : DEF.bg)) p.set('bg', S.bg.slice(1));
+    if (S.alpha !== DEF.alpha) p.set('alpha', S.alpha);
+  }
+  if (S.radius !== DEF.radius) p.set('radius', S.radius);
+  const q = p.toString().replace(/%2C/g, ',');
+  return location.origin + location.pathname + (q ? '?' + q : '');
+}
+function initSetup() {
+  document.body.classList.add('setup');
+  const box = document.getElementById('setup');
+  const sync = () => {
+    box.querySelectorAll('[data-k]').forEach(el => { const v = S[el.dataset.k]; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; });
+    box.querySelectorAll('[data-p]').forEach(el => el.checked = S.panels.split(',').includes(el.dataset.p));
+    document.getElementById('url').textContent = buildUrl();
+    const NAME = { score: '戦績', rating: 'レート', history: '履歴' };
+    document.getElementById('parts').innerHTML = S.panels.split(',').map(k =>
+      `<div class="url" style="margin-top:4px"><span style="width:44px">${NAME[k]}</span><code>${esc(buildUrl(k))}</code></div>`).join('');
+  };
+  box.addEventListener('input', e => {
+    const el = e.target;
+    if (el.dataset.p) S.panels = [...box.querySelectorAll('[data-p]')].filter(x => x.checked).map(x => x.dataset.p).join(',') || 'score';
+    else if (el.dataset.k) {
+      const k = el.dataset.k;
+      S[k] = el.type === 'checkbox' ? el.checked : (el.type === 'number' || el.type === 'range') ? +el.value : el.value;
+      if (k === 'theme') S.bg = S.theme === 'light' ? '#ffffff' : DEF.bg;
+    }
+    applyStyle(); lastJson = ''; sync(); tick();
+  });
+  document.getElementById('copy').onclick = async () => {
+    const b = document.getElementById('copy');
+    try { await navigator.clipboard.writeText(buildUrl()); b.textContent = 'コピーしました'; } catch (e) { b.textContent = '上のURLを選んでコピー'; }
+    setTimeout(() => b.textContent = 'URLをコピー', 1800);
+  };
+  sync();
+}
+
+applyStyle();
+if (SETUP) initSetup();
 tick(); setInterval(tick, 1500);
 </script>
 </body>
