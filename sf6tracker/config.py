@@ -11,9 +11,12 @@ DEFAULT = {
     "obs": {"host": "127.0.0.1", "port": 4455, "password": "", "source": ""},
     "capture": {"width": 1280, "interval": 1.0},
     "server": {"port": 17860},
-    "player": {"side": "p1", "rating_label": "MR"},
+    # names: my player name(s) as shown in game -> decides each match whether I am 1P or 2P.
+    # chars: characters I use (second clue). side: used only when neither clue works.
+    "player": {"names": [], "chars": [], "side": "p1", "rating_label": "MR"},
     "display": {"char_lang": "ja"},
-    "rois": {"vs": None, "result": None, "rating": None, "p1_char": None, "p2_char": None},
+    "rois": {"vs": None, "result": None, "rating": None, "p1_char": None, "p2_char": None,
+             "p1_name": None, "p2_name": None},
     "signals": {
         "vs": {"roi": "vs", "keywords": ["VS"], "templates": []},
         "win": {"roi": "result", "keywords": ["WIN", "WINS", "WINNER", "VICTORY"], "templates": []},

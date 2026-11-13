@@ -100,6 +100,9 @@ class Detector:
         self.pending = None      # characters gathered on the VS screen
         self.streak = (None, 0)  # (result, ticks in a row)
         self.active = None       # match that was just recorded and may still get its rating
+        self.side_votes = Counter()  # where my player name was seen during this match
+        self.side_seen = 0.0
+        self.last_side = None
         self.debug = {}
 
     # ---- single-frame checks -------------------------------------------------
@@ -148,7 +151,7 @@ class Detector:
                     cands.append((it["h"], cid))
         return (max(cands)[1], None) if cands else (None, None)
 
-    def read_rating(self, ctx):
+    def read_rating(self, ctx, my=None):
         d = self.cfg["detect"]
         roi = self.roi("rating")
         label = self.cfg["player"].get("rating_label", "MR")
@@ -156,23 +159,73 @@ class Detector:
         if roi:  # a tight ROI needs no label next to the number
             v = vision.find_rating(items, label, d["rating_min"], d["rating_max"])
             return v if v is not None else vision.find_rating(items, "", d["rating_min"], d["rating_max"])
-        if self.cfg["player"]["side"] == "p2":
+        if (my or self.cfg["player"]["side"]) == "p2":
             items = sorted(items, key=lambda it: -it["cx"])
         else:
             items = sorted(items, key=lambda it: it["cx"])
         return vision.find_rating(items, label, d["rating_min"], d["rating_max"])
+
+    def find_side(self, ctx):
+        """'p1' / 'p2' if my registered player name is on this frame, else None."""
+        names = [n for n in self.cfg["player"].get("names", []) if n.strip()]
+        if not names:
+            return None
+        found = set()
+        rois = {s: self.roi(s + "_name") for s in ("p1", "p2")}
+        if rois["p1"] or rois["p2"]:
+            for s, roi in rois.items():
+                if roi and any(vision.name_matches(it["text"], names) for it in ctx.texts(roi)):
+                    found.add(s)
+        else:
+            for it in ctx.texts(None):
+                if vision.name_matches(it["text"], names):
+                    found.add("p1" if it["cx"] < 0.5 else "p2")
+        return found.pop() if len(found) == 1 else None
+
+    def my_side(self, chars=None):
+        """Which side am I on in this match, and how do I know: (side, 'name' | 'char' | 'default')."""
+        if self.side_votes:
+            return self.side_votes.most_common(1)[0][0], "name"
+        mine = set(self.cfg["player"].get("chars", []))
+        if mine and chars:
+            hit = [s for s in ("p1", "p2") if chars.get(s) in mine]
+            if len(hit) == 1:
+                return hit[0], "char"
+        return self.cfg["player"]["side"], "default"
+
+    def _voted_chars(self):
+        p = self.pending
+        return {s: (p["votes"][s].most_common(1)[0][0] if p["votes"][s] else None) for s in ("p1", "p2")} if p else None
 
     # ---- state machine -------------------------------------------------------
     def process(self, frame, now=None):
         now = time.time() if now is None else now
         d = self.cfg["detect"]
         ctx = FrameContext(frame, self.ocr)
-        my = self.cfg["player"]["side"]
-        opp = "p2" if my == "p1" else "p1"
 
         vs, vs_info, _ = self.check_signal("vs", ctx)
         win, win_info, win_hits = self.check_signal("win", ctx)
         lose, lose_info, lose_hits = self.check_signal("lose", ctx)
+        event = None
+        chars = {}
+        if win or lose:
+            vs = False  # a result screen is never a VS screen
+        if not (win or lose) and not (self.active and not vs):
+            chars = {side: self.read_char(side, ctx) for side in ("p1", "p2")}
+        # The VS word can be missed; both character names on screen (VS screen or battle HUD) also count.
+        named = bool(chars) and all(chars[s][0] for s in chars)
+        if (vs or named or win or lose) and not self.active:
+            if now - self.side_seen > (60 if vs else 900):  # a fresh VS screen starts a new match
+                self.side_votes.clear()
+            seen = self.find_side(ctx)
+            if seen:
+                self.side_votes[seen] += 1
+                self.side_seen = now
+        my, my_by = self.my_side(self._voted_chars())
+        if my_by == "default" and not self.pending and self.last_side and self.active is None:
+            last = self.store.last()
+            if last and now - last["ts"] < d["carry_minutes"] * 60:
+                my = self.last_side  # rematch without a VS screen: same seats as before
         result = None
         if win and lose:
             if win_hits and lose_hits:  # both words on screen: the one on my side counts
@@ -181,15 +234,6 @@ class Detector:
                 result = "win" if (wx < lx) == (my == "p1") else "lose"
         elif win or lose:
             result = "win" if win else "lose"
-        if result:
-            vs = False  # a result screen is never a VS screen
-
-        event = None
-        chars = {}
-        if not result and not (self.active and not vs):
-            chars = {side: self.read_char(side, ctx) for side in ("p1", "p2")}
-        # The VS word can be missed; both character names on screen (VS screen or battle HUD) also count.
-        named = bool(chars) and all(chars[s][0] for s in chars)
         if vs and self.active:
             self.active = None
         if vs or (named and not self.active):
@@ -206,7 +250,7 @@ class Detector:
             a = self.active
             if result:
                 a["seen"] = now
-            v = self.read_rating(ctx) if (result or now - a["seen"] < 8) else None
+            v = self.read_rating(ctx, a["side"]) if (result or now - a["seen"] < 8) else None
             if v is not None:
                 a["readings"].append(v)
                 self._apply_rating(a)
@@ -216,8 +260,8 @@ class Detector:
         elif result:
             self.streak = (result, self.streak[1] + 1 if self.streak[0] == result else 1)
             if self.streak[1] >= d["confirm_ticks"]:
-                event = self._record(result, my, opp, now)
-                v = self.read_rating(ctx)
+                event = self._record(result, my, my_by, now)
+                v = self.read_rating(ctx, my)
                 if v is not None:
                     self.active["readings"].append(v)
                 self.streak = (None, 0)
@@ -227,12 +271,14 @@ class Detector:
         self.debug = {
             "time": now, "vs": vs, "result": result, "signals": {"vs": vs_info, "win": win_info, "lose": lose_info},
             "state": "result" if self.active else ("match" if self.pending else "idle"),
+            "side": my, "side_by": my_by,
             "pending": {s: dict(c) for s, c in self.pending["votes"].items()} if self.pending else None,
         }
         return event
 
-    def _record(self, result, my, opp, now):
-        fields = {"ts": now, "result": result, "auto": True,
+    def _record(self, result, my, my_by, now):
+        opp = "p2" if my == "p1" else "p1"
+        fields = {"ts": now, "result": result, "auto": True, "side": my, "side_by": my_by,
                   "rating_label": self.cfg["player"].get("rating_label", "MR")}
         p = self.pending
         if p and now - p["seen"] > 900:  # a VS screen from long ago belongs to another match
@@ -251,7 +297,9 @@ class Detector:
         prev = self.store.last()
         m = self.store.add(**fields)
         self.pending = None
-        self.active = {"id": m["id"], "start": now, "seen": now, "readings": [],
+        self.side_votes.clear()
+        self.last_side = my
+        self.active = {"id": m["id"], "start": now, "seen": now, "readings": [], "side": my,
                        "prev": prev["rating"] if prev and prev["session"] == m["session"]
                        and prev.get("rating_label") == m.get("rating_label") else None}
         return m

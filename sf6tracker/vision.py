@@ -160,4 +160,26 @@ def find_rating(items, label, lo, hi, prefer_left=True):
             return min(abs(n[1]["cx"] - l["cx"]) + 2 * abs(n[1]["cy"] - l["cy"]) for l in labels)
         nums.sort(key=dist)
         return nums[0][0] if dist(nums[0]) < 0.25 else None
+    if label:  # asked for a labelled number and the label is not on screen
+        return None
     return nums[0][0] if len({n[0] for n in nums}) == 1 else None
+
+
+def _fold(text):
+    return "".join(ch for ch in text.casefold() if ch.isalnum())
+
+
+def name_matches(text, names):
+    """True when an OCR text is (or contains) one of the registered player names, allowing small misreads."""
+    t = _fold(text)
+    if not t:
+        return False
+    for name in names:
+        n = _fold(name)
+        if not n:
+            continue
+        if t == n or (len(n) >= 3 and n in t):
+            return True
+        if len(n) >= 4 and abs(len(t) - len(n)) <= 2 and difflib.SequenceMatcher(None, t, n).ratio() >= 0.75:
+            return True
+    return False

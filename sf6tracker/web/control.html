@@ -107,11 +107,14 @@
   </div>
   <div class="card"><h2>プレイヤー</h2>
     <div class="grid">
-      <span>自分の側</span><select id="side"><option value="p1">1P（左）</option><option value="p2">2P（右）</option></select>
+      <span>プレイヤーネーム</span><input id="names" placeholder="ゲーム内の名前（複数は , で区切る）">
+      <span>自分の使用キャラ</span><select id="mychars" multiple size="5"></select>
+      <span>判定できないときの側</span><select id="side"><option value="p1">1P（左）</option><option value="p2">2P（右）</option></select>
       <span>レートの種類</span><select id="rlabel"><option>MR</option><option>LP</option></select>
       <span>キャラ名の表示</span><select id="lang"><option value="ja">日本語</option><option value="en">English</option></select>
       <span>画面を見る間隔（秒）</span><input id="interval" type="number" step="0.1" min="0.3">
     </div>
+    <p class="hint">1P / 2P は試合ごとに自動で判定します。まず画面に出ているプレイヤーネームを探し、読めなかったときは使用キャラ（Ctrl+クリックで複数選択）で判断し、それでも決まらないときだけ「判定できないときの側」を使います。</p>
     <div style="margin-top:10px"><button onclick="saveSettings()">保存</button> <span id="saved" class="ok"></span></div>
   </div>
   <div class="card"><h2>OBS に置くもの</h2>
@@ -171,7 +174,7 @@ async function loadMatches() {
   $('rows').innerHTML = ms.map(m => {
     const t = new Date(m.ts * 1000);
     const ts = `${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-    return `<tr><td>${ts}${m.auto ? '' : '<span class="tag">手動</span>'}${m.carried ? '<span class="tag">連戦</span>' : ''}</td>
+    return `<tr><td>${ts}${m.auto ? '' : '<span class="tag">手動</span>'}${m.carried ? '<span class="tag">連戦</span>' : ''}${m.side ? `<span class="tag">${m.side === 'p1' ? '1P' : '2P'}${m.side_by === 'default' ? '?' : ''}</span>` : ''}</td>
       <td><button class="${m.result}" onclick="upd(${m.id}, {result:'${m.result === 'win' ? 'lose' : 'win'}'})">${m.result === 'win' ? 'WIN' : 'LOSE'}</button></td>
       <td><select onchange="upd(${m.id}, {my_char:this.value||null})">${charOptions(m.my_char, true)}</select></td>
       <td><select onchange="upd(${m.id}, {opp_char:this.value||null})">${charOptions(m.opp_char, true)}</select></td>
@@ -187,7 +190,7 @@ async function addMatch(result) { await api('/api/matches', { result, opp_char: 
 async function newSession() { await api('/api/session/new', {}); matchesJson = ''; loadMatches(); }
 
 // ---------- calibration ----------
-const ROIS = [['vs', 'VS画面の合図', '#5aa2ff'], ['result', '勝敗の表示', '#ffd34d'], ['rating', 'レートの数字', '#2fe6a4'], ['p1_char', '1P キャラ名', '#ff8a4d'], ['p2_char', '2P キャラ名', '#d07bff']];
+const ROIS = [['vs', 'VS画面の合図', '#5aa2ff'], ['result', '勝敗の表示', '#ffd34d'], ['rating', 'レートの数字', '#2fe6a4'], ['p1_char', '1P キャラ名', '#ff8a4d'], ['p2_char', '2P キャラ名', '#d07bff'], ['p1_name', '1P プレイヤー名', '#ff6fa8'], ['p2_name', '2P プレイヤー名', '#7fe0ff']];
 const SIGS = [['vs', 'VS画面', 'vs'], ['win', '勝ち', 'result'], ['lose', '負け', 'result']];
 let active = 'result', frames = [], curSeq = null, boxes = [], drag = null;
 const cv = $('cv'), img = $('frame');
@@ -261,7 +264,8 @@ async function runTest() {
   boxes = t.all_texts; draw();
   const sig = k => { const s = t.signals[k]; return `<span class="${s.found ? 'ok' : 'ng'}">${s.found ? '見つかった' : 'なし'}</span>` + (s.score != null ? ` (一致度 ${s.score})` : '') + (s.texts && s.texts.length ? ' ' + esc(s.texts.join(' / ')) : ''); };
   $('test').innerHTML = `<p>VS画面：${sig('vs')}<br>勝ち：${sig('win')}<br>負け：${sig('lose')}<br>
-    1P：${esc(t.chars.p1.name || '読めず')} ／ 2P：${esc(t.chars.p2.name || '読めず')}<br>レート：${t.rating == null ? '読めず' : t.rating}</p>
+    1P：${esc(t.chars.p1.name || '読めず')} ／ 2P：${esc(t.chars.p2.name || '読めず')}<br>
+    自分の側：${t.side.side === 'p1' ? '1P' : '2P'}（${{ name: 'プレイヤーネームで判定', char: '使用キャラで判定', default: '判定できず、設定の側を使用' }[t.side.by]}）<br>レート：${t.rating == null ? '読めず' : t.rating}</p>
     <h2 style="margin-top:8px">画面全体から読めた文字</h2><pre>${esc(t.all_texts.map(b => b.text).join('\n')) || '（なし）'}</pre>`;
 }
 
@@ -276,15 +280,17 @@ async function loadSources() {
 }
 function fillSettings() {
   $('host').value = cfg.obs.host; $('port').value = cfg.obs.port; $('pw').value = cfg.obs.password;
+  $('names').value = (cfg.player.names || []).join(', ');
+  $('mychars').innerHTML = roster.map(c => `<option value="${c.id}" ${(cfg.player.chars || []).includes(c.id) ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
   $('side').value = cfg.player.side; $('rlabel').value = cfg.player.rating_label; $('lang').value = cfg.display.char_lang;
   $('interval').value = cfg.capture.interval;
   $('ovUrl').textContent = location.origin + '/overlay'; $('ctUrl').textContent = location.origin + '/control';
 }
 async function saveSettings() {
   await api('/api/config', { obs: { host: $('host').value.trim(), port: +$('port').value, password: $('pw').value, source: $('source').value },
-    player: { side: $('side').value, rating_label: $('rlabel').value }, display: { char_lang: $('lang').value },
+    player: { names: $('names').value.split(/[,、，]/).map(s => s.trim()).filter(Boolean), chars: [...$('mychars').selectedOptions].map(o => o.value), side: $('side').value, rating_label: $('rlabel').value }, display: { char_lang: $('lang').value },
     capture: { interval: Math.max(0.3, +$('interval').value || 1) } });
-  await loadConfig(); $('addOpp').innerHTML = '<option value="">相手キャラ（任意）</option>' + charOptions('');
+  await loadConfig(); fillSettings(); $('addOpp').innerHTML = '<option value="">相手キャラ（任意）</option>' + charOptions('');
   matchesJson = ''; pendJson = ''; loadMatches();
   $('saved').textContent = '保存しました'; setTimeout(() => $('saved').textContent = '', 2000);
   setTimeout(loadSources, 1500);

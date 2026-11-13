@@ -25,9 +25,13 @@ def text(img, s, x, y, scale=2.0, color=(255, 255, 255), th=3):
     cv2.putText(img, s, (x, y), cv2.FONT_HERSHEY_DUPLEX, scale, color, th, cv2.LINE_AA)
 
 
-def vs_frame(p1, p2):
+def vs_frame(p1, p2, n1=None, n2=None):
     img = base()
     text(img, "VS", 590, 380, 2.5)
+    if n1:
+        text(img, n1, 120, 120, 1.2)
+    if n2:
+        text(img, n2, 860, 120, 1.2)
     text(img, p1, 120, 620)
     text(img, p2, 860, 620)
     return img
@@ -112,7 +116,34 @@ def test_roi_and_unknown_character():
     assert (m["opp_char"], m["result"], m["delta"]) == ("zangief", "lose", -10), m
 
 
+def test_player_name_decides_side():
+    d = tempfile.mkdtemp()
+    cfg, store = Config(d), Store(d)
+    cfg.update({"player": {"names": ["MIGI_4080"], "side": "p1"}})
+    det = Detector(cfg, store, Library(d))
+    t = [9000.0]
+    # I am 2P this time: my character is the right one, and of WIN / LOSE the right word is mine
+    run(det, [vs_frame("JURI", "RYU", "Rival-99", "MIGI_4080")] * 3 + [play_frame()] * 4
+        + [result_frame("LOSE", 1500, both=True)] * 4 + [play_frame()] * 50, t)
+    m = store.matches()[0]
+    assert (m["side"], m["side_by"], m["my_char"], m["opp_char"], m["result"]) == ("p2", "name", "ryu", "juri", "win"), m
+    # digits inside a player name are not a rating
+    from sf6tracker.detector import FrameContext
+    assert det.read_rating(FrameContext(vs_frame("JURI", "RYU", "Rival-99", "MIGI_4080"), det.ocr)) is None
+    # next match I am 1P
+    run(det, [vs_frame("RYU", "KEN", "MIGI_4080", "Other")] * 3 + [play_frame()] * 4
+        + [result_frame("LOSE", 1490, both=True)] * 4 + [play_frame()] * 50, t)
+    m = store.matches()[1]
+    assert (m["side"], m["my_char"], m["opp_char"], m["result"]) == ("p1", "ryu", "ken", "lose"), m
+    # name not readable: fall back to the characters I use
+    cfg.update({"player": {"names": [], "chars": ["ryu"]}})
+    run(det, [vs_frame("CAMMY", "RYU")] * 3 + [play_frame()] * 4 + [result_frame("WIN", 1498)] * 4 + [play_frame()] * 50, t)
+    m = store.matches()[2]
+    assert (m["side"], m["side_by"], m["my_char"], m["opp_char"]) == ("p2", "char", "ryu", "cammy"), m
+
+
 if __name__ == "__main__":
+    test_player_name_decides_side()
     test_flow()
     test_roi_and_unknown_character()
     print("ok")

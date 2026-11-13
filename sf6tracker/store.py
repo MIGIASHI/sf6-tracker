@@ -9,7 +9,7 @@ import threading
 import time
 
 FIELDS = ("ts", "result", "my_char", "opp_char", "rating", "delta", "rating_label",
-          "my_pending", "opp_pending", "auto", "carried", "note")
+          "my_pending", "opp_pending", "auto", "carried", "note", "side", "side_by")
 
 
 class Store:

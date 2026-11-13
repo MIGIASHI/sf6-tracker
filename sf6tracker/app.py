@@ -136,7 +136,10 @@ class App:
         for side in ("p1", "p2"):
             cid, _ = d.read_char(side, ctx)
             out["chars"][side] = {"id": cid, "name": char_name(cid, self.cfg["display"]["char_lang"]) if cid else None}
-        out["rating"] = d.read_rating(ctx)
+        seen = d.find_side(ctx)
+        side, by = (seen, "name") if seen else d.my_side({s: out["chars"][s]["id"] for s in ("p1", "p2")})
+        out["side"] = {"side": side, "by": by}
+        out["rating"] = d.read_rating(ctx, side)
         for name, roi in self.cfg["rois"].items():
             if roi:
                 out["texts"][name] = [it["text"] for it in ctx.texts(roi)]
