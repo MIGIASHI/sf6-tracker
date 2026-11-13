@@ -163,6 +163,12 @@ def _my_rating(votes, need=1):
     return _top(mr, need) or (None if mr else _top(votes, need))
 
 
+def _wanted_label(cfg):
+    """'MR' / 'LP' when the user fixed the rating type, None for automatic (read it off the screen, MR first)."""
+    v = (cfg["player"].get("rating_label") or "auto").upper()
+    return v if v in ("MR", "LP") else None
+
+
 class Detector:
     def __init__(self, config, store, library, ocr=None):
         self.cfg = config
@@ -234,8 +240,25 @@ class Detector:
     def read_rating(self, ctx, my=None):
         d = self.cfg["detect"]
         roi = self.roi("rating")
-        label = self.cfg["player"].get("rating_label", "MR")
+        label = _wanted_label(self.cfg)
         items = ctx.texts(roi, fine=True)
+        if label is None:  # automatic: any "number + MR/LP" on my side, MR first
+            found = vision.find_ratings(items, d["rating_min"], d["rating_max"])
+            if not roi:
+                found = [f for f in found if (f[2]["cx"] < 0.5) == ((my or self.cfg["player"]["side"]) == "p1")]
+            mr = [f for f in found if f[1] == "MR"]
+            found = mr or found
+            if found:
+                return found[0][0]
+            # label and number read as separate pieces: a number next to "MR", else next to "LP"
+            side_items = items if roi else sorted(items, key=lambda it: it["cx"] if (my or self.cfg["player"]["side"]) == "p1" else -it["cx"])
+            for want in ("MR", "LP"):
+                v = vision.find_rating(side_items, want, d["rating_min"], d["rating_max"])
+                if v is not None:
+                    return v
+            if not roi:  # an unlabelled number elsewhere on screen (player names have digits) is not a rating
+                return None
+            label = ""
         if roi:  # a tight ROI needs no label next to the number
             v = vision.find_rating(items, label, d["rating_min"], d["rating_max"])
             return v if v is not None else vision.find_rating(items, "", d["rating_min"], d["rating_max"])
@@ -365,7 +388,7 @@ class Detector:
     def _record(self, result, my, my_by, now):
         opp = "p2" if my == "p1" else "p1"
         fields = {"ts": now, "result": result, "auto": True, "side": my, "side_by": my_by,
-                  "rating_label": self.cfg["player"].get("rating_label", "MR")}
+                  "rating_label": _wanted_label(self.cfg)}
         p = self.pending
         if p and now - p["seen"] > 900:  # a VS screen from long ago belongs to another match
             p = None
@@ -431,8 +454,10 @@ class Detector:
             elif names and vision.name_matches(it["text"], names):
                 m["side"][s] += 1
                 m["named"] += 1
+            want = _wanted_label(self.cfg)
             for v, label, _ in vision.find_ratings([it], d["rating_min"], d["rating_max"]):
-                m["rating"][s][(v, label)] += 1
+                if want is None or label == want:
+                    m["rating"][s][(v, label)] += 1
 
     def _sf6_result_clues(self, ctx):
         """Result screen: my own rating stands next to my name, the opponent's is not shown."""
@@ -492,7 +517,7 @@ class Detector:
         opp = "p2" if my == "p1" else "p1"
         result = p1res if my == "p1" else ("lose" if p1res == "win" else "win")
         fields = {"ts": now, "result": result, "auto": True, "side": my, "side_by": by,
-                  "rating_label": self.cfg["player"].get("rating_label", "MR")}
+                  "rating_label": _wanted_label(self.cfg)}
         before, label = None, None
         m = self.m
         if m:
@@ -507,7 +532,7 @@ class Detector:
         same = prev and prev["session"] == rec["session"] and prev.get("rating_label") == rec.get("rating_label") \
             and prev.get("my_char") == rec.get("my_char")
         self.active = {"id": rec["id"], "start": now, "seen": now, "readings": [], "side": my, "before": before,
-                       "label": label, "prev": prev.get("rating") if same else None, "settled": False}
+                       "label": label or _wanted_label(self.cfg), "prev": prev.get("rating") if same else None, "settled": False}
         self.m = None
         self.res_side.clear()
         self.last_side = my

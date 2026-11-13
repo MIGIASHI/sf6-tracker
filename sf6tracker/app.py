@@ -124,7 +124,8 @@ class App:
                 s["rating"] = rated[-1]["rating"]
         # the label read off the screen (LP below Master, MR above) wins over the one in the settings
         shown = [m for m in allm if m.get("rating") is not None and m.get("rating_label")]
-        s["label"] = shown[-1]["rating_label"] if shown else self.cfg["player"].get("rating_label", "MR")
+        fixed = self.cfg["player"].get("rating_label")
+        s["label"] = shown[-1]["rating_label"] if shown else (fixed if fixed in ("MR", "LP") else "MR")
         s["scope"] = scope
         s["matches"] = [self.decorate(m) for m in ms[::-1][:50]]
         return s
