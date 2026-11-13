@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>SF6 Tracker Overlay</title>
+<style>
+  :root { --win:#2fe6a4; --lose:#ff5c7c; --ink:#f4f6fb; --dim:#9aa3b8; --panel:rgba(14,17,28,.82); --line:rgba(255,255,255,.09); }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:transparent; overflow:hidden; }
+  body { font-family:"Segoe UI","Yu Gothic UI","Meiryo",system-ui,sans-serif; color:var(--ink); }
+  #root { display:flex; flex-direction:column; gap:8px; width:340px; padding:8px; transform-origin:top left; }
+  #root.right { margin-left:auto; transform-origin:top right; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .cap { font-size:11px; letter-spacing:.14em; color:var(--dim); font-weight:700; text-transform:uppercase; }
+  .score { display:flex; align-items:flex-end; justify-content:space-between; margin-top:2px; }
+  .wl { font-size:38px; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; }
+  .wl .w { color:var(--win); } .wl .l { color:var(--lose); } .wl small { font-size:18px; font-weight:700; margin:0 2px 0 1px; }
+  .wl .sep { color:var(--dim); margin:0 8px; font-weight:400; }
+  .side { text-align:right; font-size:13px; color:var(--dim); line-height:1.5; }
+  .side b { color:var(--ink); font-size:18px; font-variant-numeric:tabular-nums; }
+  .streak.win { color:var(--win); } .streak.lose { color:var(--lose); }
+  .bar { height:4px; border-radius:2px; background:var(--lose); margin-top:10px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:var(--win); transition:width .6s; }
+  .bar.empty { background:var(--line); }
+  .mr { display:flex; align-items:baseline; gap:10px; margin-top:2px; }
+  .mr .val { font-size:34px; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; }
+  .mr .diff { font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .up { color:var(--win); } .down { color:var(--lose); } .flat { color:var(--dim); }
+  svg.spark { display:block; width:100%; height:54px; margin-top:8px; }
+  .rows { margin-top:6px; }
+  .row { display:flex; align-items:center; gap:9px; padding:5px 0; border-top:1px solid var(--line); font-size:15px; }
+  .row:first-child { border-top:0; }
+  .row.new { animation:pop .5s ease-out; }
+  @keyframes pop { from { opacity:0; transform:translateX(-12px); } to { opacity:1; transform:none; } }
+  .badge { flex:none; width:22px; height:22px; border-radius:6px; font-size:13px; font-weight:800; display:grid; place-items:center; color:#0c0f18; }
+  .badge.win { background:var(--win); } .badge.lose { background:var(--lose); }
+  .names { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .names .vs { color:var(--dim); font-size:11px; margin:0 5px; }
+  .names .me { color:var(--dim); }
+  .d { flex:none; font-weight:700; font-variant-numeric:tabular-nums; font-size:14px; }
+  .empty-note { color:var(--dim); font-size:13px; padding:6px 0 2px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// URL options: ?panels=score,rating,history  &limit=8  &scale=1.2  &scope=session|today|all  &align=right  &me=0  &demo=1
+const Q = new URLSearchParams(location.search);
+const panels = (Q.get('panels') || 'score,rating,history').split(',');
+const limit = +(Q.get('limit') || 8);
+const scope = Q.get('scope') || 'session';
+const showMe = Q.get('me') !== '0';
+const root = document.getElementById('root');
+root.style.transform = 'scale(' + (+(Q.get('scale') || 1)) + ')';
+if (Q.get('align') === 'right') root.classList.add('right');
+const SCOPE = { session: 'この配信', today: '今日', all: '通算' };
+let lastTop = null, lastJson = '';
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function sign(n) { return (n > 0 ? '+' : n < 0 ? '−' : '±') + Math.abs(n); }
+function cls(n) { return n > 0 ? 'up' : n < 0 ? 'down' : 'flat'; }
+
+function spark(series) {
+  if (series.length < 2) return '';
+  const W = 310, H = 54, P = 5;
+  const lo = Math.min(...series), hi = Math.max(...series), span = (hi - lo) || 1;
+  const pts = series.map((v, i) => [P + i * (W - 2 * P) / (series.length - 1), H - P - (v - lo) * (H - 2 * P) / span]);
+  const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const col = series[series.length - 1] >= series[0] ? 'var(--win)' : 'var(--lose)';
+  const base = H - P - (series[0] - lo) * (H - 2 * P) / span;
+  const end = pts[pts.length - 1];
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <line x1="${P}" x2="${W - P}" y1="${base}" y2="${base}" stroke="rgba(255,255,255,.22)" stroke-dasharray="3 4"/>
+    <path d="${line}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+    <circle cx="${end[0]}" cy="${end[1]}" r="3.4" fill="${col}"/></svg>`;
+}
+
+function render(s) {
+  let h = '';
+  if (panels.includes('score')) {
+    const st = s.streak;
+    h += `<div class="panel"><div class="cap">${SCOPE[s.scope] || ''}の戦績</div>
+      <div class="score"><div class="wl"><span class="w">${s.wins}<small>W</small></span><span class="sep">-</span><span class="l">${s.losses}<small>L</small></span></div>
+      <div class="side"><div>勝率 <b>${s.rate == null ? '--' : s.rate.toFixed(1)}</b>%</div>
+      ${Math.abs(st) >= 2 ? `<div class="streak ${st > 0 ? 'win' : 'lose'}">${Math.abs(st)}${st > 0 ? '連勝中' : '連敗中'}</div>` : ''}</div></div>
+      <div class="bar ${s.total ? '' : 'empty'}"><i style="width:${s.total ? 100 * s.wins / s.total : 0}%"></i></div></div>`;
+  }
+  if (panels.includes('rating')) {
+    h += `<div class="panel"><div class="cap">${esc(s.label)}</div><div class="mr"><span class="val">${s.rating == null ? '----' : s.rating}</span>
+      ${s.rating_diff == null ? '' : `<span class="diff ${cls(s.rating_diff)}">${sign(s.rating_diff)}</span>`}</div>${spark(s.series || [])}</div>`;
+  }
+  if (panels.includes('history')) {
+    const ms = s.matches.slice(0, limit);
+    h += `<div class="panel"><div class="cap">対戦履歴</div><div class="rows">` + (ms.length ? ms.map((m, i) =>
+      `<div class="row ${i === 0 && lastTop !== null && m.id !== lastTop ? 'new' : ''}"><span class="badge ${m.result}">${m.result === 'win' ? 'W' : 'L'}</span>
+       <span class="names">${showMe && m.my_char ? `<span class="me">${esc(m.my_name)}</span><span class="vs">vs</span>` : ''}${esc(m.opp_name)}</span>
+       ${m.delta == null ? '' : `<span class="d ${cls(m.delta)}">${sign(m.delta)}</span>`}</div>`).join('')
+      : `<div class="empty-note">まだ対戦がありません</div>`) + `</div></div>`;
+    lastTop = ms.length ? ms[0].id : 0;
+  }
+  root.innerHTML = h;
+}
+
+function demo() {
+  const names = ['ジュリ', 'ケン', '春麗', 'キャミィ', '豪鬼', 'ガイル', 'JP', 'ルーク', 'エド', '舞'];
+  const res = [1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1, 1];
+  let r = 1612; const series = [r]; const matches = [];
+  res.forEach((w, i) => { const d = w ? 6 + (i * 3) % 5 : -(6 + (i * 2) % 5); r += d; series.push(r);
+    matches.unshift({ id: i + 1, result: w ? 'win' : 'lose', my_char: 'ryu', my_name: 'リュウ', opp_name: names[i % names.length], delta: d }); });
+  const wins = res.filter(Boolean).length;
+  return { scope, label: 'MR', wins, losses: res.length - wins, total: res.length, rate: 100 * wins / res.length, streak: 2,
+    rating: r, rating_diff: r - series[0], series, matches };
+}
+
+async function tick() {
+  try {
+    const s = Q.get('demo') ? demo() : await (await fetch('/api/state?scope=' + scope, { cache: 'no-store' })).json();
+    const j = JSON.stringify(s);
+    if (j !== lastJson) { lastJson = j; render(s); }
+  } catch (e) { /* tracker not running: keep the last picture */ }
+}
+tick(); setInterval(tick, 1500);
+</script>
+</body>
+</html>
