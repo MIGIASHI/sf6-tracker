@@ -79,8 +79,10 @@ class Library:
 class FrameContext:
     """One frame plus cached OCR results, so each ROI is read at most once."""
 
-    def __init__(self, frame, ocr, previous=None):
-        self.frame = frame
+    def __init__(self, frame, ocr, previous=None, fetch=None):
+        self.look = frame        # the picture the cheap checks run on (may be a small one)
+        self._frame = None if fetch else frame
+        self._fetch = fetch      # gets the full-size picture, only when something has to be read
         self.ocr = ocr
         self._texts = {}
         g = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (48, 27), interpolation=cv2.INTER_AREA)
@@ -88,7 +90,20 @@ class FrameContext:
         # Same picture as the last tick (menus, paused screens): reuse what was read, no OCR needed.
         if previous is not None and previous.thumb.shape == self.thumb.shape \
                 and int(abs(previous.thumb - self.thumb).max()) <= 4:
-            self._texts = previous._texts
+            # ...except where small digits count up without changing the overall picture
+            self._texts = {k: v for k, v in previous._texts.items() if k not in (("sf6", "res_p1"), ("sf6", "res_p2"))}
+
+    @property
+    def frame(self):
+        if self._frame is None:
+            got = self._fetch() if self._fetch else None
+            self._frame = got if got is not None else self.look
+        return self._frame
+
+    @frame.setter
+    def frame(self, value):
+        if self._fetch is None:
+            self._frame = value
 
     def texts(self, roi, fine=False):
         """Text inside an ROI, or on the whole frame when roi is None.
@@ -107,6 +122,52 @@ class FrameContext:
                 self._texts[key] = self.ocr.read(self.frame, None, det_width=640, top=16)
         return self._texts[key]
 
+    def region(self, name):
+        """Text inside one of the fixed SF6 screen regions (see SF6_REGIONS)."""
+        key = ("sf6", name)
+        if key not in self._texts:
+            roi, scale = SF6_REGIONS[name]
+            self._texts[key] = self.ocr.read(self.frame, roi, top=16, scale=scale)
+        return self._texts[key]
+
+
+# Where SF6 (16:9) draws what the tracker needs: name -> ([x, y, w, h] as fractions, enlargement for reading).
+# Measured on real ranked-match footage. Small regions keep a look at the screen to a few milliseconds.
+SF6_REGIONS = {
+    "bar": ([0.40, 0.762, 0.20, 0.058], 2.0),      # result screen: "WIN 1-0 LOSE" (left word = 1P, right = 2P)
+    "res_p1": ([0.04, 0.772, 0.34, 0.085], 1.5),   # result screen: player name; my own rating stands next to my
+    "res_p2": ([0.62, 0.772, 0.34, 0.085], 1.5),   # name ("51497 LP 1502 MR"), the opponent's is not shown
+    "player_p1": ([0.0, 0.352, 0.14, 0.06], 2.0),  # result screen: "PLAYER1" / "PLAYER2" above the menus. Both are
+    "player_p2": ([0.86, 0.352, 0.14, 0.06], 2.0), # there while a rematch is on offer; alone it is my seat
+    "vs_p1": ([0.0, 0.905, 0.15, 0.05], 2.0),      # VS screen: "19760 LP" under the 1P rank
+    "vs_p2": ([0.85, 0.905, 0.15, 0.05], 2.0),     # VS screen: the same for 2P
+    "vs_band": ([0.0, 0.745, 1.0, 0.215], 1.5),    # VS screen: character names, player names, ratings
+    "hud_p1": ([0.0, 0.012, 0.20, 0.118], 1.5),    # battle: character name, YOU marker, rating, player name
+    "hud_p2": ([0.80, 0.012, 0.20, 0.118], 1.5),
+}
+
+
+def _top(counter, need=1):
+    """Most seen entry of a Counter if it was seen at least `need` times."""
+    if counter:
+        key, n = counter.most_common(1)[0]
+        if n >= need:
+            return key
+    return None
+
+
+def _my_rating(votes, need=1):
+    """(value, label) out of rating votes. Master players have both on screen (MR on the VS screen,
+    LP in the battle HUD): MR is the one that matters then."""
+    mr = Counter({k: n for k, n in votes.items() if k[1] == "MR"})
+    return _top(mr, need) or (None if mr else _top(votes, need))
+
+
+def _wanted_label(cfg):
+    """'MR' / 'LP' when the user fixed the rating type, None for automatic (read it off the screen, MR first)."""
+    v = (cfg["player"].get("rating_label") or "auto").upper()
+    return v if v in ("MR", "LP") else None
+
 
 class Detector:
     def __init__(self, config, store, library, ocr=None):
@@ -122,6 +183,13 @@ class Detector:
         self.last_side = None
         self.debug = {}
         self._last_ctx = None
+        self.m = None            # sf6 layout: what is known about the match being played
+        self.res_side = Counter()  # sf6 layout: PLAYER1 / PLAYER2 seen on the result screen
+        self.res_label = None
+        self.last_record = None
+        self.card_next = 0.0
+        self.vs_next = 0.0
+        self.hurry = 0.0         # seconds until the next look when it must come sooner than usual (0 = no hurry)
 
     # ---- single-frame checks -------------------------------------------------
     def roi(self, name):
@@ -172,8 +240,25 @@ class Detector:
     def read_rating(self, ctx, my=None):
         d = self.cfg["detect"]
         roi = self.roi("rating")
-        label = self.cfg["player"].get("rating_label", "MR")
+        label = _wanted_label(self.cfg)
         items = ctx.texts(roi, fine=True)
+        if label is None:  # automatic: any "number + MR/LP" on my side, MR first
+            found = vision.find_ratings(items, d["rating_min"], d["rating_max"])
+            if not roi:
+                found = [f for f in found if (f[2]["cx"] < 0.5) == ((my or self.cfg["player"]["side"]) == "p1")]
+            mr = [f for f in found if f[1] == "MR"]
+            found = mr or found
+            if found:
+                return found[0][0]
+            # label and number read as separate pieces: a number next to "MR", else next to "LP"
+            side_items = items if roi else sorted(items, key=lambda it: it["cx"] if (my or self.cfg["player"]["side"]) == "p1" else -it["cx"])
+            for want in ("MR", "LP"):
+                v = vision.find_rating(side_items, want, d["rating_min"], d["rating_max"])
+                if v is not None:
+                    return v
+            if not roi:  # an unlabelled number elsewhere on screen (player names have digits) is not a rating
+                return None
+            label = ""
         if roi:  # a tight ROI needs no label next to the number
             v = vision.find_rating(items, label, d["rating_min"], d["rating_max"])
             return v if v is not None else vision.find_rating(items, "", d["rating_min"], d["rating_max"])
@@ -216,12 +301,15 @@ class Detector:
         return {s: (p["votes"][s].most_common(1)[0][0] if p["votes"][s] else None) for s in ("p1", "p2")} if p else None
 
     # ---- state machine -------------------------------------------------------
-    def process(self, frame, now=None):
+    def process(self, frame, now=None, fetch=None):
+        """frame: the current picture. fetch: when frame is a small one for the cheap checks, a call
+        that returns the full-size picture (used only when text has to be read)."""
         now = time.time() if now is None else now
+        if self.cfg["detect"].get("layout", "sf6") == "sf6":
+            return self._process_sf6(frame, now, fetch)
         d = self.cfg["detect"]
-        ctx = FrameContext(frame, self.ocr, self._last_ctx)
+        ctx = FrameContext(frame, self.ocr, self._last_ctx, fetch)
         self._last_ctx = ctx
-        ctx.frame = frame
 
         vs, vs_info, _ = self.check_signal("vs", ctx)
         win, win_info, win_hits = self.check_signal("win", ctx)
@@ -300,7 +388,7 @@ class Detector:
     def _record(self, result, my, my_by, now):
         opp = "p2" if my == "p1" else "p1"
         fields = {"ts": now, "result": result, "auto": True, "side": my, "side_by": my_by,
-                  "rating_label": self.cfg["player"].get("rating_label", "MR")}
+                  "rating_label": _wanted_label(self.cfg)}
         p = self.pending
         if p and now - p["seen"] > 900:  # a VS screen from long ago belongs to another match
             p = None
@@ -341,3 +429,293 @@ class Detector:
         m = self.store.get(a["id"])
         if m and (m.get("rating") != after or m.get("delta") != delta):
             self.store.update(a["id"], rating=after, delta=delta)
+
+    # ---- real SF6 screens (detect.layout == "sf6") -----------------------------
+    # VS screen -> battle HUD -> result bar. Each tick reads only a few small fixed regions.
+    @staticmethod
+    def _new_match(now):
+        return {"seen": now, "vs_last": None, "vs_reads": 0, "hud_reads": 0, "hud_next": 0.0, "linked": False,
+                "chars": {"p1": Counter(), "p2": Counter()}, "rating": {"p1": Counter(), "p2": Counter()},
+                "changed": {"p1": Counter(), "p2": Counter()}, "side": Counter(), "you": 0, "named": 0, "hud_seen": 0.0}
+
+    def _sf6_take(self, m, items, side=None):
+        """Note what a VS band (side=None: decided by position) or one HUD corner says."""
+        names = [n for n in self.cfg["player"].get("names", []) if n.strip()]
+        d = self.cfg["detect"]
+        for it in items:
+            s = side or ("p1" if it["cx"] < 0.5 else "p2")
+            if (it["cy"] < 0.06) if side else (0.74 < it["cy"] < 0.83):  # the line the character name is on
+                cid = vision.match_character(it["text"])
+                if cid:
+                    m["chars"][s][cid] += 1
+            if side and vision.tokens(it["text"]) == ["YOU"]:
+                m["side"][s] += 3
+                m["you"] += 1
+            elif names and vision.name_matches(it["text"], names):
+                m["side"][s] += 1
+                m["named"] += 1
+            want = _wanted_label(self.cfg)
+            for v, label, _ in vision.find_ratings([it], d["rating_min"], d["rating_max"]):
+                if want is None or label == want:
+                    m["rating"][s][(v, label)] += 1
+
+    def _sf6_result_clues(self, ctx):
+        """Result screen: my own rating stands next to my name, the opponent's is not shown."""
+        names = [n for n in self.cfg["player"].get("names", []) if n.strip()]
+        d = self.cfg["detect"]
+        for s in ("p1", "p2"):
+            row = ctx.region("res_" + s)
+            if vision.find_ratings(row, d["rating_min"], d["rating_max"]):
+                self.res_side[s] += 2
+            if names and any(vision.name_matches(it["text"], names) for it in row):
+                self.res_side[s] += 1
+        seats = {vision.player_seat(it["text"]) for k in ("player_p1", "player_p2") for it in ctx.region(k)} - {None}
+        self.res_label = seats.pop() if len(seats) == 1 else None
+
+    def _sf6_vs_screen(self, ctx, now):
+        """Is this the VS screen? Needs the full picture and a little reading, and menus have nothing
+        cheap to tell them apart, so outside a match this is tried only every 2.5 s (the screen stays ~4 s)."""
+        found = bool(vision.find_ratings(ctx.region("vs_p1") + ctx.region("vs_p2")))
+        self.vs_next = now if found else now + 2.5
+        return found
+
+    def _sf6_side(self):
+        """(side, how I know) for the match being played."""
+        m = self.m
+        if m and m["you"]:
+            return m["side"].most_common(1)[0][0], "you"
+        if self.res_side:
+            return self.res_side.most_common(1)[0][0], "result"
+        if m and m["side"]:
+            return m["side"].most_common(1)[0][0], "name"
+        if self.res_label:
+            return self.res_label, "label"
+        mine = set(self.cfg["player"].get("chars", []))
+        if m and mine:
+            hit = [s for s in ("p1", "p2") if _top(m["chars"][s]) in mine]
+            if len(hit) == 1:
+                return hit[0], "char"
+        return self.cfg["player"]["side"], "default"
+
+    def _sf6_complete(self, m):
+        my = m["side"].most_common(1)[0][0] if m["you"] >= 2 else None
+        return bool(my and _top(m["chars"]["p1"], 2) and _top(m["chars"]["p2"], 2) and _my_rating(m["rating"][my], 2))
+
+    def _sf6_settle_previous(self, r, my_char, now):
+        """A rating seen after a match (start of the next one, or my card on the menu) is where that match left it."""
+        last = self.store.last()
+        if not (r and last) or last["session"] != self.store.session_id or last.get("rating") is not None:
+            return
+        before = last.get("rating_before")
+        if before is None or last.get("rating_label") != r[1] or (my_char and last.get("my_char") != my_char):
+            return
+        if now - last["ts"] < 1800 and 0 < abs(r[0] - before) <= 1500:
+            self.store.update(last["id"], rating=r[0], delta=r[0] - before)
+
+    def _sf6_record(self, p1res, now):
+        my, by = self._sf6_side()
+        opp = "p2" if my == "p1" else "p1"
+        result = p1res if my == "p1" else ("lose" if p1res == "win" else "win")
+        fields = {"ts": now, "result": result, "auto": True, "side": my, "side_by": by,
+                  "rating_label": _wanted_label(self.cfg)}
+        before, label = None, None
+        m = self.m
+        if m:
+            for key, side in (("my", my), ("opp", opp)):
+                fields[key + "_char"] = _top(m["chars"][side])
+            r = _my_rating(m["rating"][my], 2) or _my_rating(m["rating"][my])
+            if r:
+                before, label = r
+                fields.update(rating_before=before, rating_label=label)
+        prev = self.store.last()
+        rec = self.store.add(**fields)
+        same = prev and prev["session"] == rec["session"] and prev.get("rating_label") == rec.get("rating_label") \
+            and prev.get("my_char") == rec.get("my_char")
+        self.active = {"id": rec["id"], "start": now, "seen": now, "readings": [], "side": my, "before": before,
+                       "label": label or _wanted_label(self.cfg), "prev": prev.get("rating") if same else None, "settled": False}
+        self.m = None
+        self.res_side.clear()
+        self.last_side = my
+        self.last_record = now
+        return rec
+
+    def _sf6_result_rating(self, ctx, now):
+        """Read my rating off the result screen. It counts up from the old value, so wait until it stands still."""
+        a, d = self.active, self.cfg["detect"]
+        if a["settled"] or now - a["start"] > 45:
+            return
+        cands = {(v, l) for v, l, _ in vision.find_ratings(ctx.region("res_" + a["side"]), d["rating_min"], d["rating_max"])
+                 if (a["label"] is None or l == a["label"]) and (a["before"] is None or abs(v - a["before"]) <= 1500)}
+        if len(cands) > 1 and any(l == "MR" for _, l in cands):
+            cands = {c for c in cands if c[1] == "MR"}
+        if len(cands) != 1:
+            return
+        a["readings"].append(cands.pop())
+        r = a["readings"]
+        v, label = r[-1]
+        if len(r) < 3 or r[-2] != r[-1] or r[-3] != r[-1] or v == a["before"]:  # not there yet, or still counting
+            return
+        if a["before"] is not None:
+            delta = v - a["before"]
+        else:
+            delta = v - a["prev"] if a["prev"] is not None else None
+        self.store.update(a["id"], rating=v, delta=delta, rating_label=label)
+        a["settled"] = True
+
+    def _process_sf6(self, frame, now, fetch=None):
+        d = self.cfg["detect"]
+        ctx = FrameContext(frame, self.ocr, self._last_ctx, fetch)
+        self._last_ctx = ctx
+        m = self.m
+        if m and now - max(m["seen"], m["hud_seen"]) > 900:
+            m = self.m = None
+        event, vs = None, False
+        self.hurry = 0.0
+        # Two colour checks on the (small) picture decide whether anything gets read at all.
+        # During a battle nothing does, apart from a look at the HUD now and then.
+        hud_on = vision.battle_hud_likely(ctx.look)
+        bar = ctx.region("bar") if vision.result_bar_likely(ctx.look) else []
+        words = vision.result_words(bar)
+        p1res = vision.p1_result(bar)
+        if p1res:
+            if self.active:
+                self.active["seen"] = now
+                self._sf6_result_rating(ctx, now)
+                self.hurry = 0.4 if not self.active["settled"] and now - self.active["start"] < 20 else 0.0
+            elif m is None and self.last_record and now - self.last_record < 600:
+                pass  # the result screen of the match that is already recorded, back after a menu
+            else:
+                self._sf6_result_clues(ctx)
+                self.streak = (p1res, self.streak[1] + 1 if self.streak[0] == p1res else 1)
+                # "WIN" and "LOSE" side by side in that small bar is unmistakable, and a quick rematch
+                # takes the screen away within a second or two: record at once.
+                if len(words) == 2 or self.streak[1] >= d["confirm_ticks"]:
+                    event = self._sf6_record(p1res, now)
+                    self._sf6_result_rating(ctx, now)
+                    self.streak = (None, 0)
+                self.hurry = 0.3
+        else:
+            self.streak = (None, 0)
+            self.res_side.clear()
+            self.res_label = None
+            if self.active and now - self.active["seen"] > 6:
+                self.active = None
+            if self.active:
+                pass
+            elif hud_on:
+                if m:
+                    m["hud_seen"] = now
+                    # After the last K.O. a quick rematch leaves the result bar up for about a second,
+                    # so a match is watched closely. These looks cost next to nothing (no reading).
+                    self.hurry = 0.5
+                done = m is not None and (self._sf6_complete(m) or m["hud_reads"] >= 10)
+                if not done or now >= m["hud_next"]:
+                    probe = self._new_match(now)
+                    for s in ("p1", "p2"):
+                        self._sf6_take(probe, ctx.region("hud_" + s), s)
+                    new = {s: _top(probe["chars"][s]) for s in ("p1", "p2")}
+                    if probe["you"] or any(new.values()):  # really the battle HUD
+                        if m:
+                            for s in ("p1", "p2"):
+                                old, cur = _my_rating(m["rating"][s], 2), _my_rating(probe["rating"][s])
+                                if old and cur and cur[1] == old[1] and cur != old:
+                                    m["changed"][s][cur] += 1
+                            if any(new[s] and _top(m["chars"][s], 2) not in (None, new[s]) for s in new) \
+                                    or any(_top(m["changed"][s], 2) for s in new):
+                                m = None  # other characters or ratings than noted: this is already the next match
+                        if m is None:
+                            m = self.m = self._new_match(now)
+                        m["seen"] = m["hud_seen"] = now
+                        m["hud_reads"] += 1
+                        m["hud_next"] = now + 30
+                        for s in ("p1", "p2"):
+                            self._sf6_take(m, ctx.region("hud_" + s), s)
+            elif m and now - m["hud_seen"] < 40:
+                # HUD gone in the middle of a match: a cinematic, or the win pose right before the result bar
+                self.hurry = 0.3
+            elif now >= self.vs_next and self._sf6_vs_screen(ctx, now):
+                vs = True
+                self.hurry = 0.5
+                if m is None or (m["vs_last"] is None and m["hud_reads"]) or (m["vs_last"] and now - m["vs_last"] > 30):
+                    m = self.m = self._new_match(now)  # a fresh VS screen starts a new match
+                m["seen"] = m["vs_last"] = now
+                if m["vs_reads"] < 4:
+                    m["vs_reads"] += 1
+                    self._sf6_take(m, ctx.region("vs_band"))
+            elif m is None and now >= self.card_next:
+                last = self.store.last()
+                if last and last.get("rating") is None and last.get("rating_before") is not None \
+                        and last["session"] == self.store.session_id and now - last["ts"] < 600:
+                    # the main menu shows my own card (name, rank, rating) in the top right corner
+                    self.card_next = now + 3
+                    probe = self._new_match(now)
+                    self._sf6_take(probe, ctx.region("hud_p2"), "p2")
+                    if probe["named"] or not [n for n in self.cfg["player"].get("names", []) if n.strip()]:
+                        self._sf6_settle_previous(_my_rating(probe["rating"]["p2"]), None, now)
+            if m and not m["linked"] and self._sf6_complete(m):
+                m["linked"] = True
+                my = m["side"].most_common(1)[0][0]
+                self._sf6_settle_previous(_my_rating(m["rating"][my], 2), _top(m["chars"][my]), now)
+
+        my, my_by = self._sf6_side() if not self.active else (self.active["side"], "recorded")
+        mine = None if not p1res else (p1res if my == "p1" else ("lose" if p1res == "win" else "win"))
+        texts = [it["text"] for it in bar]
+        m = self.m
+        self.debug = {
+            "time": now, "vs": vs, "result": mine,
+            "signals": {"vs": {"texts": []}, "win": {"texts": texts if mine == "win" else []},
+                        "lose": {"texts": texts if mine == "lose" else []}},
+            "state": "result" if self.active else ("match" if m else "idle"),
+            "side": my, "side_by": my_by,
+            "pending": {s: dict(m["chars"][s]) for s in ("p1", "p2")} if m else None,
+            "rating": {s: ["%d %s" % k for k in m["rating"][s]] for s in ("p1", "p2")} if m else None,
+        }
+        return event
+
+    # ---- one frame, for the "test" button --------------------------------------
+    def inspect(self, ctx):
+        """What a single frame shows: {'signals', 'chars', 'side', 'rating'}."""
+        if self.cfg["detect"].get("layout", "sf6") != "sf6":
+            out = {"signals": {}, "chars": {}}
+            for name in self.cfg["signals"]:
+                ok, info, _ = self.check_signal(name, ctx)
+                out["signals"][name] = dict(info, found=ok)
+            for side in ("p1", "p2"):
+                out["chars"][side] = self.read_char(side, ctx)[0]
+            seen = self.find_side(ctx)
+            side, by = (seen, "name") if seen else self.my_side(out["chars"])
+            out["side"] = {"side": side, "by": by}
+            out["rating"] = self.read_rating(ctx, side)
+            return out
+        d = self.cfg["detect"]
+        keep = self.m, Counter(self.res_side), self.res_label
+        try:
+            m = self.m = self._new_match(0)
+            self.res_side.clear()
+            self.res_label = None
+            bar = ctx.region("bar")
+            p1res = vision.p1_result(bar)
+            vs = not p1res and bool(vision.find_ratings(ctx.region("vs_p1") + ctx.region("vs_p2")))
+            if p1res:
+                self._sf6_result_clues(ctx)
+            elif vs:
+                self._sf6_take(m, ctx.region("vs_band"))
+            else:
+                for s in ("p1", "p2"):
+                    self._sf6_take(m, ctx.region("hud_" + s), s)
+            side, by = self._sf6_side()
+            mine = None if not p1res else (p1res if side == "p1" else ("lose" if p1res == "win" else "win"))
+            texts = [it["text"] for it in bar]
+            if p1res:
+                votes = Counter((v, l) for v, l, _ in vision.find_ratings(ctx.region("res_" + side), d["rating_min"], d["rating_max"]))
+                r = _my_rating(votes)
+            else:
+                r = _my_rating(m["rating"][side])
+            return {"signals": {"vs": {"found": vs, "texts": []},
+                                "win": {"found": mine == "win", "texts": texts if mine == "win" else []},
+                                "lose": {"found": mine == "lose", "texts": texts if mine == "lose" else []}},
+                    "chars": {s: _top(m["chars"][s]) for s in ("p1", "p2")},
+                    "side": {"side": side, "by": by},
+                    "rating": r[0] if r else None, "rating_label": r[1] if r else None}
+        finally:
+            self.m, self.res_side, self.res_label = keep
