@@ -46,12 +46,15 @@
   #setup button { background:#252b3d; color:#eef1f8; border:1px solid #2c3347; border-radius:5px; padding:4px 10px; font:inherit; cursor:pointer; }
   #setup button.wait { border-color:#ffd34d; color:#ffd34d; }
   #setup button.pri { background:#5aa2ff; color:#08101f; border:0; font-weight:700; }
-  #setup .map { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:6px; }
+  #setup .map { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:6px; }
   #setup .slot { display:flex; gap:6px; align-items:center; background:#1d2232; border-radius:6px; padding:5px 6px; }
   #setup .slot b { width:34px; }
   #setup .url { display:flex; gap:8px; align-items:center; margin-top:8px; }
   #setup code { flex:1; background:#0d1018; padding:6px 8px; border-radius:5px; word-break:break-all; user-select:all; }
   #setup .hint { color:#98a1b8; margin:4px 0; }
+  body.setup #dev svg { touch-action:none; }
+  body.setup #dev g[data-part] { cursor:grab; }
+  body.setup #dev g[data-part]:hover .b { stroke:#ffd34d; stroke-width:3; }
 </style>
 </head>
 <body>
@@ -81,7 +84,8 @@
   <div class="hint">「パリィ→前前」と「通常技のすぐあとの前前」をドライブラッシュとして数え、オーバーレイの「ドライブラッシュ」に試合ごとの平均を出します（対戦中の分だけ。入力から数えるので目安です）。数えるのは OBS に置いた入力表示だけで、この設定画面では数えません。</div>
   <div class="hint">ボタンの割り当て：「設定」を押してから、コントローラーのそのボタンを押してください。名前も変えられます。</div>
   <div class="map" id="map"></div>
-  <div class="g" style="margin-top:8px"><button id="reset">割り当てを初期値に戻す</button></div>
+  <div class="g" style="margin-top:8px"><button id="addButton">＋ ボタンを追加</button><button id="resetPositions">位置を初期値に戻す</button><button id="reset">割り当てを初期値に戻す</button></div>
+  <div class="hint">上のボタンをドラッグして位置を変えられます。最大32個まで追加でき、「削除」で個別に取り除けます。配置・数・割り当ては下のURLに保存されます。</div>
   <div class="url"><code id="url"></code><button class="pri" id="copy">URLをコピー</button></div>
   <div class="hint">この URL を OBS のブラウザソースに貼ると、この見た目で表示されます（幅・高さは表示に合わせて調整してください）。</div>
 </div>
@@ -94,14 +98,15 @@ const ACTIONS = ['LP', 'MP', 'HP', 'LK', 'MK', 'HK', 'E1', 'E2'];
 // Standard-mapping defaults, the SF6 classic layout most sticks and pads ship with:
 // X=LP Y=MP RB=HP / A=LK B=MK RT=HK / LB, LT = extra (drive parry / impact etc.)
 const DEFMAP = [2, 3, 5, 0, 1, 7, 4, 6];
+const defaultMap = count => [...DEFMAP, 8, 9, 10, 11, ...Array.from({length: 112}, (_, i) => i + 16)].slice(0, count);
 const DEFNAMES = { pad: ['□', '△', 'R1', '×', '○', 'R2', 'L1', 'L2'], leverless: ['LP', 'MP', 'HP', 'LK', 'MK', 'HK', 'L1', 'L2'], stick: ['LP', 'MP', 'HP', 'LK', 'MK', 'HK', 'L1', 'L2'] };
 const STRENGTH = [0, 1, 2, 0, 1, 2, -1, -1];
 const Q = new URLSearchParams(location.search);
 const S = { type: 'stick', pad: 'any', history: false, rows: 12, frames: true, scale: 1, bgmode: 'color', bg: '#0e111c', alpha: 0.78, on: '#ffd34d', color3: false, map: DEFMAP.slice(), names: null,
-  rush: true, parry: 'mpmk' };
+  rush: true, parry: 'mpmk', positions: {} };
 const DEF = JSON.parse(JSON.stringify(S));
 if (['pad', 'leverless', 'stick'].includes(Q.get('type'))) S.type = Q.get('type');
-if (/^(any|[0-3])$/.test(Q.get('pad') || '')) S.pad = Q.get('pad');
+if (/^(any|\d{1,3})$/.test(Q.get('pad') || '')) S.pad = Q.get('pad');
 if (Q.get('history') === '1') S.history = true;
 if (Q.get('rush') === '0') S.rush = false;
 if (['mpmk', 'e1', 'e2'].includes(Q.get('parry'))) S.parry = Q.get('parry');
@@ -112,17 +117,27 @@ if (Q.get('bg') === 'none') S.bgmode = 'none'; else if (/^[0-9a-f]{6}$/i.test(Q.
 if (Q.get('alpha') !== null && !isNaN(+Q.get('alpha'))) S.alpha = +Q.get('alpha');
 if (/^[0-9a-f]{6}$/i.test(Q.get('on') || '')) S.on = '#' + Q.get('on');
 if (Q.get('color3') === '1') S.color3 = true;
-if (Q.get('map')) { const m = Q.get('map').split(',').map(Number); if (m.length === 8 && m.every(n => n >= 0 && n < 32)) S.map = m; }
-if (Q.get('names')) { const n = Q.get('names').split(','); if (n.length === 8) S.names = n.map(x => x.slice(0, 4)); }
+const count = Number(Q.get('buttons'));
+if (Number.isInteger(count) && count >= 1 && count <= 32) S.map = defaultMap(count);
+if (Q.get('map')) { const m = Q.get('map').split(',').map(Number); if (m.length === S.map.length && m.some(n => n >= 0) && m.every(n => Number.isInteger(n) && n >= -1 && n < 128)) S.map = m; }
+if (Q.get('names')) { const n = Q.get('names').split(','); if (n.length === S.map.length) S.names = n.map(x => x.slice(0, 4)); }
+for (const item of (Q.get('positions') || '').split(';')) {
+  const [id, x, y] = item.split(':');
+  if (/^(a\d{1,2}|[UDLR])$/.test(id) && Number.isFinite(+x) && Number.isFinite(+y))
+    S.positions[id] = [Math.max(-1000, Math.min(2000, +x)), Math.max(-1000, Math.min(2000, +y))];
+}
 const SETUP = !!Q.get('setup');
-const names = () => S.names || DEFNAMES[S.type];
+const names = () => S.map.map((_, i) => S.names?.[i] ?? DEFNAMES[S.type][i] ?? ('B' + (i + 1)));
 
 // ---------- drawing ----------
 const NS = 'http://www.w3.org/2000/svg';
-let parts = {};   // id -> [elements] that light up
+let parts = {}, groups = {};   // id -> elements that light up / draggable group
 function el(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent && parent.appendChild(e); return e; }
 function btn(svg, id, shape, label, strength) {
-  const g = el('g', {}, svg);
+  if (id.startsWith('a') && (+id.slice(1) >= S.map.length || S.map[+id.slice(1)] < 0)) return;
+  const g = el('g', { 'data-part': id }, svg); groups[id] = g;
+  const offset = S.positions[id];
+  if (offset) g.setAttribute('transform', `translate(${offset[0]} ${offset[1]})`);
   const b = shape(g); b.classList.add('b'); if (S.color3 && strength >= 0) b.classList.add('c' + strength);
   const out = [b];
   if (label !== undefined) {
@@ -145,7 +160,7 @@ function eightButtons(svg, ox, oy, r) {
 
 let ball = null, shaft = null, stickC = null;
 function build() {
-  parts = {}; ball = shaft = null;
+  parts = {}; groups = {}; ball = shaft = null;
   const dev = document.getElementById('dev');
   dev.innerHTML = '';
   let svg;
@@ -184,7 +199,24 @@ function build() {
     btn(svg, 'a4', circle(fx + d, fy, r), n[4], STRENGTH[4]);
     btn(svg, 'a3', circle(fx, fy + d, r), n[3], STRENGTH[3]);
   }
+  const extraY = S.type === 'pad' ? 210 : S.type === 'stick' ? 190 : 210;
+  for (let a = 8; a < S.map.length; a++) {
+    const i = a - 8;
+    btn(svg, 'a' + a, circle(35 + (i % 8) * 52, extraY + Math.floor(i / 8) * 54, 21), names()[a], -1);
+  }
+  fitCanvas(svg);
   applyStyle();
+}
+
+function fitCanvas(svg = document.querySelector('#dev svg')) {
+  if (!svg) return;
+  const base = S.type === 'pad' ? [400, 170] : S.type === 'stick' ? [400, 150] : [470, 170];
+  // Include moved buttons, even when they were dragged above or left of the original canvas.
+  const box = svg.getBBox(), left = Math.min(0, Math.floor(box.x - 4)), top = Math.min(0, Math.floor(box.y - 4));
+  const width = Math.max(base[0], Math.ceil(box.x + box.width + 4)) - left;
+  const height = Math.max(base[1], Math.ceil(box.y + box.height + 4)) - top;
+  svg.setAttribute('viewBox', `${left} ${top} ${width} ${height}`);
+  svg.setAttribute('width', width); svg.setAttribute('height', height);
 }
 
 function applyStyle() {
@@ -199,6 +231,21 @@ function applyStyle() {
 }
 
 // ---------- reading the controller ----------
+let nativeInput = false, nativePads = [], nativeSeen = 0;
+async function pollNativeInput() {
+  let delay = 16;
+  try {
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 1000);
+    let response;
+    try { response = await fetch('/api/input', { signal: controller.signal }); } finally { clearTimeout(timeout); }
+    if (response.status === 404) return; // Python / older native versions keep the browser path.
+    if (!response.ok) throw new Error('input unavailable');
+    const data = await response.json();
+    if (!data.supported) return;
+    nativeInput = true; nativePads = data.pads || []; nativeSeen = performance.now();
+  } catch (e) { delay = 500; }
+  setTimeout(pollNativeInput, delay);
+}
 // DirectInput sticks often report the lever as a hat on axis 9: -1 = up, then clockwise in steps of 2/7, >1 = centre.
 function hatDir(v) {
   if (v === undefined || v > 1.05 || v < -1.05) return null;
@@ -206,12 +253,18 @@ function hatDir(v) {
   return [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]][i] || null;
 }
 function readState() {
-  const pads = [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter(Boolean);
+  let pads = [];
+  if (nativeInput) pads = performance.now() - nativeSeen < 250 ? nativePads : [];
+  else { try { pads = [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter(Boolean); } catch (e) {} }
   const use = S.pad === 'any' ? pads : pads.filter(p => p.index === +S.pad);
   const pressed = new Set(); let x = 0, y = 0;
   for (const p of use) {
-    p.buttons.forEach((b, i) => { if (b.pressed || b.value > 0.5) pressed.add(i); });
-    if (pressed.has(12)) y = -1; if (pressed.has(13)) y = 1; if (pressed.has(14)) x = -1; if (pressed.has(15)) x = 1;
+    const buttons = new Set();
+    p.buttons.forEach((b, i) => { if (b.pressed || b.value > 0.5) { pressed.add(i); buttons.add(i); } });
+    if (p.direction) [x, y] = p.direction;
+    else {
+      if (buttons.has(12)) y = -1; if (buttons.has(13)) y = 1; if (buttons.has(14)) x = -1; if (buttons.has(15)) x = 1;
+    }
     if (!x && !y && p.axes.length >= 2) {
       if (Math.abs(p.axes[0]) > 0.5) x = Math.sign(p.axes[0]);
       if (Math.abs(p.axes[1]) > 0.5) y = Math.sign(p.axes[1]);
@@ -230,7 +283,7 @@ function frame(t) {
   const st = readState();
   // assign mode in the designer: the next pressed button goes to the waiting slot
   if (waiting !== null) {
-    const extra = [...st.pressed].filter(i => i < 12 || i > 15);
+    const extra = [...st.pressed];
     if (extra.length) { S.map[waiting] = extra[0]; waiting = null; renderMap(); updateUrl(); }
   }
   for (const k in parts) parts[k].forEach(e => e.classList.remove('on'));
@@ -260,7 +313,8 @@ function frame(t) {
     drawHist();
   }
   const msg = document.getElementById('msg');
-  msg.textContent = st.pads.length ? '' : 'コントローラーのボタンを1回押すと表示されます';
+  msg.textContent = st.pads.length ? (SETUP && nativeInput ? 'Windowsから入力を取得中（ゲーム操作中も有効）' : '') :
+    nativeInput ? 'コントローラーが未接続です（Windows入力）' : 'コントローラーのボタンを1回押すと表示されます';
   if (SETUP) updatePadList(st.pads);
   requestAnimationFrame(frame);
 }
@@ -277,14 +331,16 @@ function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<':
 function buildUrl() {
   const p = new URLSearchParams();
   p.set('type', S.type);
+  if (S.map.length !== 8) p.set('buttons', S.map.length);
   if (S.pad !== 'any') p.set('pad', S.pad);
   if (S.history) { p.set('history', '1'); if (S.rows !== DEF.rows) p.set('rows', S.rows); if (!S.frames) p.set('frames', '0'); }
   if (S.scale !== 1) p.set('scale', S.scale);
   if (S.bgmode === 'none') p.set('bg', 'none'); else { if (S.bg !== DEF.bg) p.set('bg', S.bg.slice(1)); if (S.alpha !== DEF.alpha) p.set('alpha', S.alpha); }
   if (S.on !== DEF.on) p.set('on', S.on.slice(1));
   if (S.color3) p.set('color3', '1');
-  if (S.map.join() !== DEFMAP.join()) p.set('map', S.map.join(','));
-  if (S.names && S.names.join() !== DEFNAMES[S.type].join()) p.set('names', S.names.join(','));
+  if (S.map.join() !== defaultMap(S.map.length).join()) p.set('map', S.map.join(','));
+  if (S.names) p.set('names', names().join(','));
+  if (Object.keys(S.positions).length) p.set('positions', Object.entries(S.positions).map(([id, xy]) => `${id}:${xy.join(':')}`).join(';'));
   if (!S.rush) p.set('rush', '0');
   if (S.parry !== DEF.parry) p.set('parry', S.parry);
   return location.origin + location.pathname + '?' + p.toString().replace(/%2C/g, ',');
@@ -292,8 +348,10 @@ function buildUrl() {
 function updateUrl() { document.getElementById('url').textContent = buildUrl(); }
 function renderMap() {
   const n = names();
-  document.getElementById('map').innerHTML = ACTIONS.map((a, i) => `<div class="slot"><input type="text" data-name="${i}" value="${esc(n[i])}" maxlength="4">
-    <span style="flex:1;color:#98a1b8">ボタン${S.map[i]}</span><button data-assign="${i}" class="${waiting === i ? 'wait' : ''}">${waiting === i ? '押して…' : '設定'}</button></div>`).join('');
+  const active = S.map.filter(b => b >= 0).length;
+  document.getElementById('addButton').disabled = active >= 32;
+  document.getElementById('map').innerHTML = S.map.map((b, i) => b < 0 ? '' : `<div class="slot"><input type="text" data-name="${i}" aria-label="ボタン${i + 1}の名前" value="${esc(n[i])}" maxlength="4">
+    <span style="flex:1;color:#98a1b8">ボタン${S.map[i]}</span><button data-assign="${i}" class="${waiting === i ? 'wait' : ''}">${waiting === i ? '押して…' : '設定'}</button><button data-remove="${i}" aria-label="ボタン${i + 1}を削除" ${active <= 1 ? 'disabled' : ''}>削除</button></div>`).join('');
 }
 let padIds = '';
 function updatePadList(pads) {
@@ -302,6 +360,7 @@ function updatePadList(pads) {
   padIds = ids;
   const sel = document.getElementById('padSel');
   sel.innerHTML = '<option value="any">すべて</option>' + pads.map(p => `<option value="${p.index}">${p.index + 1}: ${esc(p.id.slice(0, 40))}</option>`).join('');
+  if (S.pad !== 'any' && !pads.some(p => p.index === +S.pad)) sel.add(new Option(`未接続: ${+S.pad + 1}`, S.pad));
   sel.value = S.pad;
 }
 function initSetup() {
@@ -321,13 +380,46 @@ function initSetup() {
     const prevType = S.type;
     S[k] = t.type === 'checkbox' ? t.checked : (t.type === 'number' || t.type === 'range') ? +t.value : t.value;
     if (k === 'type' && prevType !== S.type && S.names && S.names.join() === DEFNAMES[prevType].join()) S.names = null;
+    if (k === 'type' && prevType !== S.type) S.positions = {};
     build(); lastHist = ''; sync();
   });
   box.addEventListener('click', e => {
     const a = e.target.dataset.assign;
     if (a !== undefined) { waiting = waiting === +a ? null : +a; renderMap(); }
+    const remove = e.target.dataset.remove;
+    if (remove !== undefined && S.map.filter(b => b >= 0).length > 1) {
+      S.map[+remove] = -1; delete S.positions['a' + remove]; waiting = null;
+      build(); lastHist = ''; sync();
+    }
   });
-  document.getElementById('reset').onclick = () => { S.map = DEFMAP.slice(); S.names = null; build(); sync(); };
+  document.getElementById('addButton').onclick = () => {
+    if (S.map.filter(b => b >= 0).length >= 32) return;
+    const free = defaultMap(124).find(b => !S.map.includes(b));
+    const hole = S.map.indexOf(-1);
+    if (hole >= 0) S.map[hole] = free; else S.map.push(free);
+    build(); lastHist = ''; sync();
+  };
+  document.getElementById('resetPositions').onclick = () => { S.positions = {}; build(); sync(); };
+  document.getElementById('reset').onclick = () => { S.map = S.map.map((b, i) => b < 0 ? -1 : defaultMap(S.map.length)[i]); S.names = null; waiting = null; build(); sync(); };
+  let dragging = null;
+  const dev = document.getElementById('dev');
+  const point = (e, svg) => new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
+  dev.addEventListener('pointerdown', e => {
+    const group = e.target.closest('g[data-part]');
+    if (!group || e.button !== 0) return;
+    const svg = group.ownerSVGElement, id = group.dataset.part;
+    dragging = { group, svg, id, from: point(e, svg), offset: S.positions[id] || [0, 0] };
+    svg.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  dev.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const d = dragging, p = point(e, d.svg);
+    const xy = [Math.round(d.offset[0] + p.x - d.from.x), Math.round(d.offset[1] + p.y - d.from.y)];
+    S.positions[d.id] = xy;
+    d.group.setAttribute('transform', `translate(${xy[0]} ${xy[1]})`); updateUrl();
+  });
+  const endDrag = () => { if (dragging) { fitCanvas(dragging.svg); dragging = null; } };
+  dev.addEventListener('pointerup', endDrag); dev.addEventListener('pointercancel', endDrag);
   document.getElementById('copy').onclick = async () => {
     const b = document.getElementById('copy'), text = buildUrl();
     let ok = false;
@@ -384,6 +476,7 @@ if (RUSH_ON) {
 
 build();
 if (SETUP) initSetup();
+if (/^https?:$/.test(location.protocol)) pollNativeInput();
 addEventListener('gamepadconnected', () => { padIds = ''; });
 requestAnimationFrame(frame);
 </script>

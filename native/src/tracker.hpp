@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "detector.hpp"
+#include "input.hpp"
 
 namespace sf6 {
 
@@ -65,6 +66,7 @@ private:
 	Ocr ocr_;
 	std::unique_ptr<Detector> det_;
 	std::unique_ptr<HttpServer> http_;
+	InputCapture input_;
 	int port_ = 0;
 
 	std::atomic<bool> running_{false};

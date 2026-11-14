@@ -35,6 +35,17 @@ jobs:
           EXE=./http-build/http_check
           if [ "${{ runner.os }}" = Windows ]; then EXE=./http-build/Release/http_check.exe; fi
           python native/tests/test_http.py "$EXE"
+      - name: Check controller mappings and input capture lifecycle
+        shell: bash
+        run: |
+          EXE=./http-build/input_check
+          if [ "${{ runner.os }}" = Windows ]; then EXE=./http-build/Release/input_check.exe; fi
+          "$EXE"
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: native-input-check-windows
+          path: http-build/Release/input_check.exe
 
   same-as-python:
     name: Native recognition matches the Python tracker

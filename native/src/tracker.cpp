@@ -139,6 +139,8 @@ bool Tracker::start(int port_override)
 				return json_response(state(req.param("scope").empty() ? "session" : req.param("scope")));
 			if (p == "/api/status")
 				return json_response(status());
+			if (p == "/api/input")
+				return json_response(input_.snapshot());
 			if (p == "/api/matches")
 				return json_response(matches_decorated());
 			if (p == "/api/config")
@@ -222,6 +224,7 @@ bool Tracker::start(int port_override)
 		http_.reset();
 	}
 	running_ = true;
+	input_.start();
 	worker_ = std::thread(&Tracker::loop, this);
 	return http_ != nullptr;
 }
@@ -236,6 +239,7 @@ void Tracker::stop()
 	if (http_)
 		http_->stop();
 	http_.reset();
+	input_.stop();
 }
 
 void Tracker::put_frame(const uint8_t *bgra, int width, int height, int stride)
