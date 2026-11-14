@@ -74,6 +74,11 @@
     <label>押した色 <input type="color" data-k="on"></label>
     <label><input type="checkbox" data-k="color3">P/K を強さで色分け</label>
   </div>
+  <div class="g">
+    <label><input type="checkbox" data-k="rush">ドライブラッシュを数える</label>
+    <label>パリィのボタン <select data-k="parry"><option value="mpmk">中P＋中K</option><option value="e1">E1</option><option value="e2">E2</option></select></label>
+  </div>
+  <div class="hint">「パリィ→前前」と「通常技のすぐあとの前前」をドライブラッシュとして数え、オーバーレイの「ドライブラッシュ」に試合ごとの平均を出します（対戦中の分だけ。入力から数えるので目安です）。数えるのは OBS に置いた入力表示だけで、この設定画面では数えません。</div>
   <div class="hint">ボタンの割り当て：「設定」を押してから、コントローラーのそのボタンを押してください。名前も変えられます。</div>
   <div class="map" id="map"></div>
   <div class="g" style="margin-top:8px"><button id="reset">割り当てを初期値に戻す</button></div>
@@ -92,11 +97,14 @@ const DEFMAP = [2, 3, 5, 0, 1, 7, 4, 6];
 const DEFNAMES = { pad: ['□', '△', 'R1', '×', '○', 'R2', 'L1', 'L2'], leverless: ['LP', 'MP', 'HP', 'LK', 'MK', 'HK', 'L1', 'L2'], stick: ['LP', 'MP', 'HP', 'LK', 'MK', 'HK', 'L1', 'L2'] };
 const STRENGTH = [0, 1, 2, 0, 1, 2, -1, -1];
 const Q = new URLSearchParams(location.search);
-const S = { type: 'stick', pad: 'any', history: false, rows: 12, frames: true, scale: 1, bgmode: 'color', bg: '#0e111c', alpha: 0.78, on: '#ffd34d', color3: false, map: DEFMAP.slice(), names: null };
+const S = { type: 'stick', pad: 'any', history: false, rows: 12, frames: true, scale: 1, bgmode: 'color', bg: '#0e111c', alpha: 0.78, on: '#ffd34d', color3: false, map: DEFMAP.slice(), names: null,
+  rush: true, parry: 'mpmk' };
 const DEF = JSON.parse(JSON.stringify(S));
 if (['pad', 'leverless', 'stick'].includes(Q.get('type'))) S.type = Q.get('type');
 if (/^(any|[0-3])$/.test(Q.get('pad') || '')) S.pad = Q.get('pad');
 if (Q.get('history') === '1') S.history = true;
+if (Q.get('rush') === '0') S.rush = false;
+if (['mpmk', 'e1', 'e2'].includes(Q.get('parry'))) S.parry = Q.get('parry');
 if (Q.get('frames') === '0') S.frames = false;
 if (+Q.get('rows')) S.rows = Math.max(3, Math.min(30, +Q.get('rows')));
 if (+Q.get('scale')) S.scale = +Q.get('scale');
@@ -230,6 +238,7 @@ function frame(t) {
   if (st.y < 0) on('U'); if (st.y > 0) on('D'); if (st.x < 0) on('L'); if (st.x > 0) on('R');
   const acts = [];
   S.map.forEach((b, a) => { if (st.pressed.has(b)) { on('a' + a); acts.push(a); } });
+  rushStep(st, acts, t || performance.now());
   if (ball) {
     const k = 28 * ((st.x && st.y) ? 0.75 : 1);
     const bx = stickC[0] + st.x * k, by = stickC[1] + st.y * k;
@@ -276,6 +285,8 @@ function buildUrl() {
   if (S.color3) p.set('color3', '1');
   if (S.map.join() !== DEFMAP.join()) p.set('map', S.map.join(','));
   if (S.names && S.names.join() !== DEFNAMES[S.type].join()) p.set('names', S.names.join(','));
+  if (!S.rush) p.set('rush', '0');
+  if (S.parry !== DEF.parry) p.set('parry', S.parry);
   return location.origin + location.pathname + '?' + p.toString().replace(/%2C/g, ',');
 }
 function updateUrl() { document.getElementById('url').textContent = buildUrl(); }
@@ -328,6 +339,47 @@ function initSetup() {
     setTimeout(() => b.textContent = 'URLをコピー', 1800);
   };
   sync();
+}
+
+// ---------- Drive Rush counting ----------
+// Counted from the controller, not the screen: "parry > forward forward" (raw rush, also with parry held)
+// and "a normal > forward forward" (cancel rush, e.g. 2MK > 66). Input alone cannot tell whether the normal
+// connected, so a dash right after a whiffed normal counts too: the number is a guide, not exact.
+// The tracker keeps only what happens during a battle and knows which way "forward" is (1P / 2P).
+const RUSH_ON = S.rush && !SETUP && /^https?:$/.test(location.protocol);
+let mySide = 'p1', parryPrev = false, attackPrev = [], lastParry = -1e9, lastAttack = -1e9;
+let fwdPrev = false, fwdTap = -1e9, lastRush = -1e9, rushPending = 0;
+function rushStep(st, acts, now) {
+  if (!RUSH_ON) return;
+  const has = a => acts.includes(a);
+  const parry = (has(1) && has(4)) || (S.parry === 'e1' && has(6)) || (S.parry === 'e2' && has(7));
+  if (parry && !parryPrev) lastParry = now;
+  parryPrev = parry;
+  for (let a = 0; a < 6; a++) if (has(a) && !attackPrev.includes(a)) lastAttack = now;
+  attackPrev = acts;
+  const fwd = mySide === 'p2' ? st.x < 0 : st.x > 0;
+  if (fwd && !fwdPrev) {
+    if (now - fwdTap < 250) {  // second tap of 66, with the lever off forward in between
+      const raw = parry || now - lastParry < 500;
+      const cancel = now - lastAttack < 400;
+      if ((raw || cancel) && now - lastRush > 400) { lastRush = now; rushPending++; }
+      fwdTap = -1e9;
+    } else fwdTap = now;
+  }
+  fwdPrev = fwd;
+}
+if (RUSH_ON) {
+  let beat = 0;
+  setInterval(async () => {
+    beat++;
+    if (!rushPending && beat % 5) return;  // a heartbeat every 5 s says "counting" even with no rush
+    const n = rushPending; rushPending = 0;
+    try { await fetch('/api/rush', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ n }) }); }
+    catch (e) { rushPending += n; }
+  }, 1000);
+  setInterval(async () => {
+    try { const s = await (await fetch('/api/status')).json(); if (s.debug && s.debug.side) mySide = s.debug.side; } catch (e) {}
+  }, 2000);
 }
 
 build();

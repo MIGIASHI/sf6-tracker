@@ -202,6 +202,11 @@ bool Tracker::start(int port_override)
 		}
 		if (p == "/api/shutdown") // the Python version stops here; inside OBS we keep running
 			return json_response({{"ok", true}, {"native", true}});
+		if (p == "/api/rush") { // the input display counting Drive Rush inputs
+			json n = jget(data, "n");
+			int k = n.is_number() ? std::clamp(int(n.get<double>()), 0, 10) : 0;
+			return json_response({{"ok", true}, {"counted", add_rush(k)}});
+		}
 		if (p == "/api/session/new")
 			return json_response({{"session", new_session()}});
 		if (p == "/api/test")
@@ -443,6 +448,12 @@ std::optional<json> Tracker::update_match(int id, const json &fields)
 bool Tracker::delete_match(int id)
 {
 	return store_.remove(id);
+}
+
+bool Tracker::add_rush(int n)
+{
+	std::lock_guard<std::mutex> lock(det_mutex_);
+	return det_ && det_->add_rush(n, now_seconds());
 }
 
 int Tracker::new_session()

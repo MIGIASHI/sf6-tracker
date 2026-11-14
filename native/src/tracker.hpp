@@ -46,6 +46,7 @@ public:
 	std::optional<json> update_match(int id, const json &fields);
 	bool delete_match(int id);
 	int new_session();
+	bool add_rush(int n);
 	json test_frame(const json &seq);
 	json frame_list();
 	std::string frame_bmp(long long seq); // -1 = latest; "" when not there

@@ -74,6 +74,9 @@ public:
 	// What a single picture shows, for the "test" button.
 	json inspect(const Frame &look, const Image &full);
 
+	// The input display saw n Drive Rush inputs (0 = only saying it is counting). Counted during a battle only.
+	bool add_rush(int n, double now);
+
 	double hurry() const { return hurry_; } // seconds until the next look when it must come sooner (0 = no hurry)
 	json debug() const { return debug_; }
 
@@ -89,6 +92,7 @@ private:
 		Counter<std::string> side;
 		int you = 0, named = 0;
 		double hud_seen = 0;
+		int rush = 0;
 	};
 	struct Active {
 		int id = 0;
@@ -124,7 +128,7 @@ private:
 	std::string res_label_;
 	std::pair<std::string, int> streak_{"", 0};
 	std::string last_side_;
-	double last_record_ = 0, card_next_ = 0, vs_next_ = 0, hurry_ = 0;
+	double last_record_ = 0, card_next_ = 0, vs_next_ = 0, hurry_ = 0, rush_seen_ = 0;
 	std::unique_ptr<FrameContext> last_ctx_;
 	Image last_full_;
 	json debug_ = json::object();
