@@ -43,6 +43,8 @@ target_sources(
     src/tracker.hpp
     src/http.cpp
     src/http.hpp
+    src/input.cpp
+    src/input.hpp
     src/detector.cpp
     src/detector.hpp
     src/store.cpp
@@ -68,7 +70,7 @@ endif()
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE third_party "${SF6_ORT_DIR}/include")
 if(WIN32)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ws2_32)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ws2_32 xinput9_1_0 dinput8 dxguid ole32 user32)
   install(
     FILES "${SF6_ORT_DIR}/lib/onnxruntime.dll"
     DESTINATION "${CMAKE_PROJECT_NAME}/data/ort"
