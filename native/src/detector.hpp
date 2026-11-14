@@ -102,6 +102,13 @@ private:
 		std::optional<int> before, prev;
 		bool settled = false;
 	};
+	struct Recovery {
+		json fields, last_id;
+		RatingKey before;
+		int session = 0, confirmations = 0;
+		double started = 0;
+		std::optional<RatingKey> candidate;
+	};
 
 	std::vector<std::string> names() const;
 	std::string wanted_label() const; // "MR" / "LP" when fixed in the settings, "" for automatic
@@ -116,6 +123,8 @@ private:
 	void settle_previous(const std::optional<RatingKey> &r, const std::string &my_char, double now);
 	json record(const std::string &p1res, double now);
 	void result_rating(FrameContext &ctx, double now);
+	void arm_recovery();
+	std::optional<json> recover_rating(const Match &probe, double now);
 
 	Config &cfg_;
 	Store &store_;
@@ -124,6 +133,8 @@ private:
 
 	std::optional<Match> m_;
 	std::optional<Active> active_;
+	std::optional<Recovery> recovery_;
+	int recovery_session_ = 0;
 	Counter<std::string> res_side_;
 	std::string res_label_;
 	std::pair<std::string, int> streak_{"", 0};

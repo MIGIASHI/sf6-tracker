@@ -106,6 +106,15 @@ def scenario():
         out.append((t[0], result("lose", "p1", "%d MR" % v, "WASURENE", "p1")))
         t[0] += 0.4
     hold(menu, 4, 1.5)
+    # 4: result screen is entirely missed. Next battle swaps sides and opponent, MR rose by nine.
+    hold(battle("JP", "JP", "p1", "1499 MR", "1490 MR", "WASURENE", "Other"), 20, 0.5)
+    hold(menu, 4, 1.5)
+    hold(battle("RYU", "JP", "p2", "1450 MR", "1508 MR", "Next", "WASURENE"), 10, 0.5)
+    # 5: the next ordinary result must remain a separate match, not duplicate the recovered win.
+    for v in (1508, 1504, 1500, 1500, 1500, 1500):
+        out.append((t[0], result("win", "p2", "%d MR" % v, "WASURENE", "p2")))
+        t[0] += 0.4
+    hold(menu, 4, 1.5)
     return out
 
 
@@ -117,7 +126,7 @@ def run_python(frames, d):
     return store.matches()
 
 
-KEYS = ("result", "my_char", "opp_char", "side", "side_by", "rating_before", "rating", "delta", "rating_label")
+KEYS = ("result", "my_char", "opp_char", "side", "side_by", "rating_before", "rating", "delta", "rating_label", "note")
 
 
 def main():
@@ -137,6 +146,12 @@ def main():
     with open(os.path.join(dc, "history.json"), encoding="utf-8") as f:
         native = json.load(f)["matches"]
     py = run_python(frames, dp)
+    assert len(py) == 5 and len(native) == 5, (py, native)
+    for matches in (py, native):
+        recovered = matches[3]
+        assert (recovered['result'], recovered['delta'], recovered['side'], recovered['opp_char']) == ('win', 9, 'p1', 'jp'), recovered
+        assert recovered.get('side_by') == 'rating' and recovered.get('note'), recovered
+        assert matches[4]['result'] == 'lose' and matches[4]['delta'] == -8, matches[4]
     print("python recorded %d matches, native %d" % (len(py), len(native)))
     bad = len(py) != len(native)
     for i, (a, b) in enumerate(zip(py, native)):
