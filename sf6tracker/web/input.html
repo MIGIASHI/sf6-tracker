@@ -231,7 +231,7 @@ function applyStyle() {
 }
 
 // ---------- reading the controller ----------
-let nativeInput = false, nativePads = [], nativeSeen = 0;
+let nativeInput = false, nativePads = [], nativeSeen = 0, autoPadIndex = null;
 async function pollNativeInput() {
   let delay = 16;
   try {
@@ -256,7 +256,17 @@ function readState() {
   let pads = [];
   if (nativeInput) pads = performance.now() - nativeSeen < 250 ? nativePads : [];
   else { try { pads = [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter(Boolean); } catch (e) {} }
-  const use = S.pad === 'any' ? pads : pads.filter(p => p.index === +S.pad);
+  let use = pads.filter(p => p.index === +S.pad);
+  if (S.pad === 'any') {
+    // Steam / controller remappers may expose the same controller through two APIs.
+    // Prefer its active standard-mapped view, instead of mixing two button numberings.
+    const active = pads.filter(p => p.buttons.some(b => b.pressed || b.value > 0.5) ||
+      p.axes.slice(0, 2).some(v => Math.abs(v) > 0.5) || p.direction?.some(v => v));
+    const chosen = active.find(p => p.mapping === 'standard') || active[0] ||
+      pads.find(p => p.index === autoPadIndex) || pads.find(p => p.mapping === 'standard') || pads[0];
+    use = chosen ? [chosen] : [];
+    if (chosen) autoPadIndex = chosen.index;
+  }
   const pressed = new Set(); let x = 0, y = 0;
   for (const p of use) {
     const buttons = new Set();
@@ -359,7 +369,7 @@ function updatePadList(pads) {
   if (ids === padIds) return;
   padIds = ids;
   const sel = document.getElementById('padSel');
-  sel.innerHTML = '<option value="any">すべて</option>' + pads.map(p => `<option value="${p.index}">${p.index + 1}: ${esc(p.id.slice(0, 40))}</option>`).join('');
+  sel.innerHTML = '<option value="any">自動（操作中の機器）</option>' + pads.map(p => `<option value="${p.index}">${p.index + 1}: ${esc(p.id.slice(0, 40))}</option>`).join('');
   if (S.pad !== 'any' && !pads.some(p => p.index === +S.pad)) sel.add(new Option(`未接続: ${+S.pad + 1}`, S.pad));
   sel.value = S.pad;
 }
