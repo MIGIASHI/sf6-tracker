@@ -63,6 +63,8 @@ jobs:
           g++ -O2 -std=c++17 -Inative/third_party -Iort/include -o replay native/tests/replay.cpp $S/detector.cpp $S/store.cpp $S/text.cpp $S/ocr.cpp $S/image.cpp $S/scene.cpp -ldl
       - name: Colour checks
         run: python native/tests/compare_with_python.py
+      - name: Missed-result recovery guards
+        run: python tests/test_rating_recovery.py
       - name: Text rules
         run: python native/tests/compare_text_with_python.py
       - name: Text reading
