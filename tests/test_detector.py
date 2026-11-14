@@ -150,3 +150,25 @@ if __name__ == "__main__":
     test_flow()
     test_roi_and_unknown_character()
     print("ok")
+
+
+def test_drive_rush_count():
+    d = tempfile.mkdtemp()
+    cfg, store = Config(d), Store(d)
+    det = Detector(cfg, store, Library(d))
+    now = 5000.0
+    # not in a battle: nothing is counted
+    assert det.add_rush(1, now) is False
+    det.m = det._new_match(now)
+    det.m["hud_seen"] = now
+    assert det.add_rush(2, now + 1) and det.add_rush(1, now + 3)
+    rec = det._sf6_record("win", now + 10)
+    assert rec["rushes"] == 3, rec
+    # a match played while the input display was not counting has no number (not zero)
+    det.active = None
+    det.m = det._new_match(now + 100)
+    det.m["hud_seen"] = now + 100
+    rec = det._sf6_record("lose", now + 120)
+    assert rec.get("rushes") is None, rec
+    s = summarize(store.matches())
+    assert (s["rush_avg"], s["rush_total"], s["rush_matches"]) == (3.0, 3, 1), s

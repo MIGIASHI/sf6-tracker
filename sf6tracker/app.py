@@ -133,6 +133,9 @@ class App:
         s["matches"] = [self.decorate(m) for m in ms[::-1][:50]]
         return s
 
+    def add_rush(self, n):
+        return self.detector.add_rush(n)
+
     def status(self):
         return {"capture": self.capture.status, "error": self.error or self.ocr.error, "tick_ms": self.tick_ms,
                 "debug": self.detector.debug, "frames": len(self.frames), "session": self.store.session_id,

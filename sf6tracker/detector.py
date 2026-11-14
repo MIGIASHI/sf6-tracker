@@ -190,6 +190,7 @@ class Detector:
         self.card_next = 0.0
         self.vs_next = 0.0
         self.hurry = 0.0         # seconds until the next look when it must come sooner than usual (0 = no hurry)
+        self.rush_seen = 0.0     # last time the input display said it is counting Drive Rushes
 
     # ---- single-frame checks -------------------------------------------------
     def roi(self, name):
@@ -438,6 +439,17 @@ class Detector:
                 "chars": {"p1": Counter(), "p2": Counter()}, "rating": {"p1": Counter(), "p2": Counter()},
                 "changed": {"p1": Counter(), "p2": Counter()}, "side": Counter(), "you": 0, "named": 0, "hud_seen": 0.0}
 
+    def add_rush(self, n, now=None):
+        """The input display saw n Drive Rush inputs (n = 0: it is only saying that it is counting).
+        Counted only while a battle is on screen; menus, replays of the result screen etc. do not count."""
+        now = time.time() if now is None else now
+        self.rush_seen = now
+        m = self.m
+        if n and m and not self.active and now - m["hud_seen"] < 40:
+            m["rush"] = m.get("rush", 0) + int(n)
+            return True
+        return False
+
     def _sf6_take(self, m, items, side=None):
         """Note what a VS band (side=None: decided by position) or one HUD corner says."""
         names = [n for n in self.cfg["player"].get("names", []) if n.strip()]
@@ -527,6 +539,9 @@ class Detector:
             if r:
                 before, label = r
                 fields.update(rating_before=before, rating_label=label)
+            # only when the input display was counting during this match; otherwise unknown, not zero
+            if m["hud_seen"] and now - self.rush_seen < 15:
+                fields["rushes"] = m.get("rush", 0)
         prev = self.store.last()
         rec = self.store.add(**fields)
         same = prev and prev["session"] == rec["session"] and prev.get("rating_label") == rec.get("rating_label") \

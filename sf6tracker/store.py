@@ -9,7 +9,7 @@ import threading
 import time
 
 FIELDS = ("ts", "result", "my_char", "opp_char", "rating", "delta", "rating_label",
-          "my_pending", "opp_pending", "auto", "carried", "note", "side", "side_by", "rating_before")
+          "my_pending", "opp_pending", "auto", "carried", "note", "side", "side_by", "rating_before", "rushes")
 
 
 class Store:
@@ -120,7 +120,11 @@ def summarize(matches):
         start = first["rating"] - first["delta"] if first.get("delta") is not None else first["rating"]
         if start != series[0]:
             series = [start] + series
+    # Drive Rush counts exist only for matches played while the input display was counting
+    rush = [m["rushes"] for m in matches if m.get("rushes") is not None]
     return {
+        "rush_avg": round(sum(rush) / len(rush), 1) if rush else None,
+        "rush_total": sum(rush), "rush_matches": len(rush),
         "wins": wins, "losses": losses, "total": wins + losses,
         "rate": round(100.0 * wins / (wins + losses), 1) if wins + losses else None,
         "streak": streak,

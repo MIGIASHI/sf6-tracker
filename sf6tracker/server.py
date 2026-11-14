@@ -127,6 +127,12 @@ def make_handler(app):
                 app.running = False
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return
+            if p == "/api/rush":  # the input display counting Drive Rush inputs
+                try:
+                    n = max(0, min(10, int(data.get("n", 0))))
+                except (TypeError, ValueError):
+                    n = 0
+                return self.send({"ok": True, "counted": app.add_rush(n)})
             if p == "/api/session/new":
                 return self.send({"session": app.store.new_session()})
             if p == "/api/test":

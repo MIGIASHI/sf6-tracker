@@ -169,6 +169,16 @@ Detector::Match Detector::new_match(double now)
 	return m;
 }
 
+bool Detector::add_rush(int n, double now)
+{
+	rush_seen_ = now;
+	if (n > 0 && m_ && !active_ && now - m_->hud_seen < 40) {
+		m_->rush += n;
+		return true;
+	}
+	return false;
+}
+
 void Detector::take(Match &m, const Items &items, const char *side)
 {
 	const auto my_names = names();
@@ -301,6 +311,9 @@ json Detector::record(const std::string &p1res, double now)
 			fields["rating_before"] = r->first;
 			fields["rating_label"] = r->second;
 		}
+		// only when the input display was counting during this match; otherwise unknown, not zero
+		if (m_->hud_seen > 0 && now - rush_seen_ < 15)
+			fields["rushes"] = m_->rush;
 	}
 	auto prev = store_.last();
 	json rec = store_.add(fields);

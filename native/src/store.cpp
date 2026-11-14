@@ -17,7 +17,7 @@ namespace {
 
 const char *const kFields[] = {"ts",          "result",     "my_char", "opp_char", "rating", "delta",
 			       "rating_label", "my_pending", "opp_pending", "auto", "carried", "note",
-			       "side",         "side_by",    "rating_before"};
+			       "side",         "side_by",    "rating_before", "rushes"};
 
 fs::path to_path(const std::string &utf8)
 {
@@ -299,6 +299,16 @@ json summarize(const json &matches)
 		    {"rating_start", start}, {"series", series}};
 	if (wins + losses)
 		out["rate"] = std::round(1000.0 * wins / (wins + losses)) / 10.0;
+	// Drive Rush counts exist only for matches played while the input display was counting
+	int rush_total = 0, rush_n = 0;
+	for (const auto &m : matches)
+		if (jget(m, "rushes").is_number()) {
+			rush_total += jget(m, "rushes").get<int>();
+			rush_n++;
+		}
+	out["rush_avg"] = rush_n ? json(std::round(10.0 * rush_total / rush_n) / 10.0) : json(nullptr);
+	out["rush_total"] = rush_total;
+	out["rush_matches"] = rush_n;
 	out["rating_diff"] = series.empty() ? json(nullptr) : json(series.back().get<int>() - start.get<int>());
 	return out;
 }
