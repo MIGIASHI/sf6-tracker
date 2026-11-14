@@ -110,7 +110,7 @@
 </section>
 
 <section id="settings">
-  <div class="card"><h2>OBS との接続（OBS: ツール → WebSocketサーバー設定）</h2>
+  <div class="card" id="obsCard"><h2>OBS との接続（OBS: ツール → WebSocketサーバー設定）</h2>
     <div class="grid">
       <span>ホスト / ポート</span><span class="rowf"><input id="host"><input id="port" type="number"></span>
       <span>パスワード</span><input id="pw" type="password">
@@ -162,6 +162,8 @@ async function pollStatus() {
     const d = s.debug || {};
     $('status').innerHTML = esc(s.capture) + (d.state ? ' ／ ' + STATE[d.state] : '') + (s.tick_ms ? ' ／ 1回 ' + s.tick_ms + 'ms' : '')
       + (s.error ? ` <span class="err">／ ${esc(s.error)}</span>` : '');
+    // the native plugin runs inside OBS: no WebSocket connection to set up
+    $('obsCard').style.display = s.native ? 'none' : '';
     const pj = JSON.stringify(s.pending);
     if (pj !== pendJson) { pendJson = pj; renderPending(s.pending); }
   } catch (e) { $('status').innerHTML = '<span class="err">トラッカーが動いていません</span>'; }
