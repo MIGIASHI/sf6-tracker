@@ -3,8 +3,11 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <map>
+#include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -38,7 +41,9 @@ private:
 	Handler handler_;
 	intptr_t listen_ = -1;
 	std::atomic<bool> running_{false};
-	std::atomic<int> clients_{0};
+	std::mutex clients_mutex_;
+	std::condition_variable clients_done_;
+	std::set<intptr_t> clients_;
 	std::thread thread_;
 };
 

@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.16)
+project(sf6_http_tests LANGUAGES CXX)
+
+find_package(Threads REQUIRED)
+add_executable(http_check http_check.cpp ../src/http.cpp)
+target_compile_features(http_check PRIVATE cxx_std_17)
+target_link_libraries(http_check PRIVATE Threads::Threads)
+if(WIN32)
+  target_compile_definitions(http_check PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(http_check PRIVATE ws2_32)
+endif()

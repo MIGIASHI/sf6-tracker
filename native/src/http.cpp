@@ -52,7 +52,11 @@ bool send_all(intptr_t s, const std::string &data)
 {
 	size_t off = 0;
 	while (off < data.size()) {
-		int n = send((decltype(socket(0, 0, 0)))s, data.data() + off, int(std::min<size_t>(data.size() - off, 1 << 20)), 0);
+		int flags = 0;
+#ifdef MSG_NOSIGNAL
+		flags = MSG_NOSIGNAL;
+#endif
+		int n = send((decltype(socket(0, 0, 0)))s, data.data() + off, int(std::min<size_t>(data.size() - off, 1 << 20)), flags);
 		if (n <= 0)
 			return false;
 		off += size_t(n);
@@ -116,9 +120,14 @@ HttpServer::~HttpServer()
 
 bool HttpServer::start(int port, std::string &error)
 {
+	if (running_)
+		return true;
 #ifdef _WIN32
 	WSADATA wsa;
-	WSAStartup(MAKEWORD(2, 2), &wsa);
+	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+		error = "cannot initialize sockets";
+		return false;
+	}
 #endif
 	auto s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 #ifdef _WIN32
@@ -127,6 +136,9 @@ bool HttpServer::start(int port, std::string &error)
 	if (s < 0) {
 #endif
 		error = "cannot create a socket";
+#ifdef _WIN32
+		WSACleanup();
+#endif
 		return false;
 	}
 #ifdef _WIN32
@@ -142,6 +154,9 @@ bool HttpServer::start(int port, std::string &error)
 	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // this PC only
 	if (bind(s, reinterpret_cast<sockaddr *>(&addr), sizeof addr) != 0 || listen(s, 16) != 0) {
 		CLOSESOCK(s);
+#ifdef _WIN32
+		WSACleanup();
+#endif
 		error = "port " + std::to_string(port) + " is in use (is the Python tracker running?)";
 		return false;
 	}
@@ -163,9 +178,19 @@ void HttpServer::stop()
 #endif
 	if (thread_.joinable())
 		thread_.join();
-	// Let open requests finish (they hold no reference to us after this).
-	for (int i = 0; i < 200 && clients_.load() > 0; ++i)
-		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	// Wake blocked reads/writes, then wait until no client can touch this server or its handler.
+	std::unique_lock<std::mutex> lock(clients_mutex_);
+	for (intptr_t client : clients_) {
+#ifdef _WIN32
+		shutdown((SOCKET)client, SD_BOTH);
+#else
+		shutdown(int(client), SHUT_RDWR);
+#endif
+	}
+	clients_done_.wait(lock, [this] { return clients_.empty(); });
+#ifdef _WIN32
+	WSACleanup();
+#endif
 }
 
 void HttpServer::accept_loop()
@@ -183,11 +208,24 @@ void HttpServer::accept_loop()
 				break;
 			continue;
 		}
-		clients_++;
-		std::thread([this, c] {
-			serve(intptr_t(c));
-			clients_--;
-		}).detach();
+		std::lock_guard<std::mutex> lock(clients_mutex_);
+		clients_.insert(intptr_t(c));
+		try {
+			std::thread([this, c] {
+				try {
+					serve(intptr_t(c));
+				} catch (...) {
+					// Always release the connection, even if handling the request fails.
+				}
+				std::lock_guard<std::mutex> lock(clients_mutex_);
+				CLOSESOCK(c);
+				clients_.erase(intptr_t(c));
+				clients_done_.notify_all();
+			}).detach();
+		} catch (...) {
+			CLOSESOCK(c);
+			clients_.erase(intptr_t(c));
+		}
 	}
 }
 
@@ -197,9 +235,11 @@ void HttpServer::serve(intptr_t sock)
 #ifdef _WIN32
 	DWORD tv = 5000;
 	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&tv), sizeof tv);
+	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&tv), sizeof tv);
 #else
 	timeval tv{5, 0};
 	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
 #endif
 	std::string buf;
 	char chunk[8192];
@@ -207,7 +247,6 @@ void HttpServer::serve(intptr_t sock)
 	while ((head_end = buf.find("\r\n\r\n")) == std::string::npos) {
 		int n = recv(s, chunk, sizeof chunk, 0);
 		if (n <= 0 || buf.size() > 65536) {
-			CLOSESOCK(s);
 			return;
 		}
 		buf.append(chunk, size_t(n));
@@ -218,7 +257,6 @@ void HttpServer::serve(intptr_t sock)
 	std::string first = head.substr(0, line_end);
 	size_t sp1 = first.find(' '), sp2 = first.find(' ', sp1 + 1);
 	if (sp1 == std::string::npos || sp2 == std::string::npos) {
-		CLOSESOCK(s);
 		return;
 	}
 	req.method = first.substr(0, sp1);
@@ -254,6 +292,8 @@ void HttpServer::serve(intptr_t sock)
 			req.body.append(chunk, size_t(n));
 		}
 		req.body.resize(std::min(req.body.size(), want));
+		if (!running_ || req.body.size() != want)
+			return;
 		try {
 			res = handler_(req);
 		} catch (const std::exception &e) {
@@ -269,7 +309,6 @@ void HttpServer::serve(intptr_t sock)
 		out += h.first + ": " + h.second + "\r\n";
 	out += "\r\n";
 	send_all(sock, out) && send_all(sock, res.body);
-	CLOSESOCK(s);
 }
 
 } // namespace sf6

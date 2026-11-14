@@ -31,3 +31,15 @@ OBS 31 以降（33 で確認予定）の 64bit Windows 版向けです。
 - Python 版と同じ答えを出すかを、次のテストで確かめます（CI でも毎回実行）: 色判定 `compare_with_python.py`、文字の判定 `compare_text_with_python.py`、文字認識 `compare_ocr_with_python.py`、試合の記録 `compare_detector_with_python.py`。
 - 同梱物のライセンスは `data/licenses/THIRD_PARTY.txt` にあります。
 - 土台は [obs-plugintemplate](https://github.com/obsproject/obs-plugintemplate) です。OBS（libobs）は GPL-2.0 のため、このフォルダも GPL-2.0（`LICENSE`）です。
+
+### HTTP サーバーの終了・再起動テスト
+
+OBS や OCR のモデルなしで、通信中の停止と再起動を確認できます（CMake と C++17 コンパイラが必要）。リポジトリ直下から実行します。
+
+```
+cmake -S native/tests -B http-build
+cmake --build http-build --config Release
+python native/tests/test_http.py http-build/Release/http_check.exe
+```
+
+Linux では最後の実行ファイルを `http-build/http_check` にします。GitHub Actions でも Windows / Linux の両方で実行します。
