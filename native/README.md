@@ -21,6 +21,17 @@ Python 版と同時には動かせません（どちらもポート 17860 を使
 
 ## 入れ方
 
+配布ZIPは配置先に合わせて、どちらか一方を選んでください。中のDLLとモデルは同じで、どちらもエラー87の修正を含みます。
+
+| ZIP / Actions成果物 | 配置先 |
+|---|---|
+| `sf6-tracker-native-windows` | OBS本体のフォルダ。中の `obs-plugins` と `data` をコピー |
+| `sf6-tracker-native-windows-programdata` | 従来形式。中の `sf6-tracker-native` を `C:\ProgramData\obs-studio\plugins\` にコピー |
+
+従来形式のDLLの配置は `C:\ProgramData\obs-studio\plugins\sf6-tracker-native\bin\64bit\sf6-tracker-native.dll` です。両形式を同時に入れないでください。
+
+OBS本体のフォルダへ入れる場合の手順:
+
 1. GitHub の Actions →「Native plugin」の最新の実行から `sf6-tracker-native-windows` をダウンロードして展開します。
 2. OBSを終了し、中の **`obs-plugins` と `data`** を、使用しているOBS本体のフォルダ（通常 `C:\Program Files\obs-studio\`）にコピーします。ポータブル版は `bin`・`data`・`obs-plugins` があるフォルダがコピー先です。
 3. `obs-plugins\64bit\sf6-tracker-native.dll` と `data\obs-plugins\sf6-tracker-native\web\input.html` があることを確認します。`obs-plugins` の中にさらに `obs-plugins` を入れないでください。
