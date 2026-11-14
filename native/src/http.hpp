@@ -37,6 +37,7 @@ public:
 private:
 	void accept_loop();
 	void serve(intptr_t sock);
+	int receive(intptr_t sock, char *buffer, int size);
 
 	Handler handler_;
 	intptr_t listen_ = -1;

@@ -229,6 +229,28 @@ void HttpServer::accept_loop()
 	}
 }
 
+int HttpServer::receive(intptr_t sock, char *buffer, int size)
+{
+	auto s = (decltype(socket(0, 0, 0)))sock;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (running_ && std::chrono::steady_clock::now() < deadline) {
+		fd_set readable;
+		FD_ZERO(&readable);
+		FD_SET(s, &readable);
+		timeval wait{0, 100000};
+#ifdef _WIN32
+		int ready = select(0, &readable, nullptr, nullptr, &wait);
+#else
+		int ready = select(int(s) + 1, &readable, nullptr, nullptr, &wait);
+#endif
+		if (ready < 0 || !running_)
+			return -1;
+		if (ready > 0)
+			return recv(s, buffer, size, 0);
+	}
+	return -1;
+}
+
 void HttpServer::serve(intptr_t sock)
 {
 	auto s = (decltype(socket(0, 0, 0)))sock;
@@ -245,7 +267,7 @@ void HttpServer::serve(intptr_t sock)
 	char chunk[8192];
 	size_t head_end = std::string::npos;
 	while ((head_end = buf.find("\r\n\r\n")) == std::string::npos) {
-		int n = recv(s, chunk, sizeof chunk, 0);
+		int n = receive(sock, chunk, sizeof chunk);
 		if (n <= 0 || buf.size() > 65536) {
 			return;
 		}
@@ -286,7 +308,7 @@ void HttpServer::serve(intptr_t sock)
 	} else {
 		req.body = buf.substr(head_end + 4);
 		while (req.body.size() < want) {
-			int n = recv(s, chunk, sizeof chunk, 0);
+			int n = receive(sock, chunk, sizeof chunk);
 			if (n <= 0)
 				break;
 			req.body.append(chunk, size_t(n));
