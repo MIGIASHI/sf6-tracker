@@ -41,11 +41,6 @@ jobs:
           EXE=./http-build/input_check
           if [ "${{ runner.os }}" = Windows ]; then EXE=./http-build/Release/input_check.exe; fi
           "$EXE"
-      - uses: actions/upload-artifact@v4
-        if: runner.os == 'Windows'
-        with:
-          name: native-input-check-windows
-          path: http-build/Release/input_check.exe
 
   same-as-python:
     name: Native recognition matches the Python tracker
@@ -111,21 +106,25 @@ jobs:
         run: cmake --build --preset windows-x64 --config RelWithDebInfo --parallel
       - name: Install into a folder layout OBS understands
         run: cmake --install build_x64 --prefix release --config RelWithDebInfo
-      - name: Add install notes
+      - name: Package for the OBS installation folder
+        run: ./package-windows.ps1 -ReleaseDir release -OutputDir package
+      - name: Verify OCR startup with OBS DLL search policy and relative data paths
         run: |
-          @"
-          SF6 Tracker (native)  Made by WASURENE.
-
-          Install: close OBS, then copy the folder "sf6-tracker-native" into
-            C:\ProgramData\obs-studio\plugins\
-          so that you get
-            C:\ProgramData\obs-studio\plugins\sf6-tracker-native\bin\64bit\sf6-tracker-native.dll
-          Start OBS. Right-click the SF6 game capture > Filters > + > "SF6 Tracker".
-          Control panel: http://127.0.0.1:17860/control   Overlay: http://127.0.0.1:17860/overlay
-          (Stop the Python tracker first: both use port 17860.)
-          "@ | Set-Content -Encoding utf8 release/README.txt
-          Get-ChildItem -Recurse release | Select-Object FullName, Length
+          cmake --build --preset windows-x64 --config RelWithDebInfo --target ocr_load_check
+          if ($LASTEXITCODE -ne 0) { throw 'OCR test build failed' }
+          $ocrCheck = (Resolve-Path build_x64/tests/RelWithDebInfo/ocr_load_check.exe).Path
+          Push-Location package
+          try {
+            & $ocrCheck 'data/obs-plugins/sf6-tracker-native/ort/sf6-onnxruntime.dll' 'data/obs-plugins/sf6-tracker-native/models/ch_PP-OCRv4_det_infer.onnx' 'data/obs-plugins/sf6-tracker-native/models/ch_PP-OCRv4_rec_infer.onnx'
+            if ($LASTEXITCODE -ne 0) { throw 'OCR startup test failed' }
+          } finally { Pop-Location }
+      - name: Verify plugin registration with OBS 32.2.2
+        run: |
+          Invoke-WebRequest 'https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-Windows-x64.zip' -OutFile obs-32.2.2.zip
+          if ((Get-FileHash obs-32.2.2.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1') { throw 'OBS archive hash mismatch' }
+          Expand-Archive obs-32.2.2.zip -DestinationPath obs-32.2.2
+          python tests/check_obs_module.py obs-32.2.2 package
       - uses: actions/upload-artifact@v4
         with:
           name: sf6-tracker-native-windows
-          path: native/release
+          path: native/package
