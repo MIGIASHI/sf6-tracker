@@ -117,15 +117,18 @@ class App:
             ms = allm
         else:
             ms = [m for m in allm if m["session"] == self.store.session_id]
-        s = summarize(ms)
-        if s["rating"] is None:  # nothing rated in this scope yet: still show the last known rating
-            rated = [m for m in allm if m.get("rating") is not None]
-            if rated:
-                s["rating"] = rated[-1]["rating"]
         # the label read off the screen (LP below Master, MR above) wins over the one in the settings
         shown = [m for m in allm if m.get("rating") is not None and m.get("rating_label")]
         fixed = self.cfg["player"].get("rating_label")
-        s["label"] = shown[-1]["rating_label"] if shown else (fixed if fixed in ("MR", "LP") else "MR")
+        label = shown[-1]["rating_label"] if shown else (fixed if fixed in ("MR", "LP") else "MR")
+        # LP and MR are different scales: the number, the change and the graph use one kind only
+        other = lambda m: m.get("rating") is not None and m.get("rating_label") not in (None, label)
+        s = summarize([dict(m, rating=None, delta=None) if other(m) else m for m in ms])
+        if s["rating"] is None:  # nothing rated in this scope yet: still show the last known rating
+            rated = [m for m in allm if m.get("rating") is not None and not other(m)]
+            if rated:
+                s["rating"] = rated[-1]["rating"]
+        s["label"] = label
         s["scope"] = scope
         s["matches"] = [self.decorate(m) for m in ms[::-1][:50]]
         return s
