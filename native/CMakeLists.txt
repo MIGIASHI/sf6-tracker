@@ -34,7 +34,63 @@ if(ENABLE_QT)
   )
 endif()
 
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.cpp src/sf6-filter.cpp src/scene.cpp src/scene.hpp)
+target_sources(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE
+    src/plugin-main.cpp
+    src/sf6-filter.cpp
+    src/tracker.cpp
+    src/tracker.hpp
+    src/http.cpp
+    src/http.hpp
+    src/detector.cpp
+    src/detector.hpp
+    src/store.cpp
+    src/store.hpp
+    src/text.cpp
+    src/text.hpp
+    src/ocr.cpp
+    src/ocr.hpp
+    src/image.cpp
+    src/image.hpp
+    src/scene.cpp
+    src/scene.hpp
+)
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_17)
+
+# Text reading: ONNX Runtime (only its headers at build time; the library is loaded by path at run
+# time) and the PP-OCRv4 models that the Python tracker uses through RapidOCR 1.4.4.
+set(SF6_ORT_DIR "" CACHE PATH "Unpacked ONNX Runtime release (include/ and lib/)")
+set(SF6_MODELS_DIR "" CACHE PATH "Folder with ch_PP-OCRv4_det_infer.onnx and ch_PP-OCRv4_rec_infer.onnx")
+if(NOT EXISTS "${SF6_ORT_DIR}/include/onnxruntime_cxx_api.h")
+  message(FATAL_ERROR "Set SF6_ORT_DIR to an unpacked ONNX Runtime release (see native/README.md)")
+endif()
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE third_party "${SF6_ORT_DIR}/include")
+if(WIN32)
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ws2_32)
+  install(
+    FILES "${SF6_ORT_DIR}/lib/onnxruntime.dll"
+    DESTINATION "${CMAKE_PROJECT_NAME}/data/ort"
+    RENAME sf6-onnxruntime.dll
+  )
+endif()
+install(
+  FILES "${SF6_MODELS_DIR}/ch_PP-OCRv4_det_infer.onnx" "${SF6_MODELS_DIR}/ch_PP-OCRv4_rec_infer.onnx"
+  DESTINATION "${CMAKE_PROJECT_NAME}/data/models"
+)
+# The overlay, control panel and input display pages are the Python version's, unchanged.
+install(
+  FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/../sf6tracker/web/control.html"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../sf6tracker/web/overlay.html"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../sf6tracker/web/input.html"
+  DESTINATION "${CMAKE_PROJECT_NAME}/data/web"
+)
+install(
+  FILES third_party/nlohmann/LICENSE.MIT
+  DESTINATION "${CMAKE_PROJECT_NAME}/data/licenses"
+  RENAME nlohmann-json-LICENSE.MIT
+)
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

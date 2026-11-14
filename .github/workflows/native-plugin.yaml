@@ -4,21 +4,46 @@ on:
   push:
     paths:
       - "native/**"
-      - "sf6tracker/vision.py"
+      - "sf6tracker/**"
       - ".github/workflows/native-plugin.yaml"
   workflow_dispatch:
 
+env:
+  ORT_VERSION: "1.20.1"
+  RAPIDOCR_VERSION: "1.4.4"
+
 jobs:
-  scene-checks:
-    name: Colour checks match the Python tracker
+  same-as-python:
+    name: Native recognition matches the Python tracker
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install numpy opencv-python-headless
-      - run: python native/tests/compare_with_python.py
+      - name: Python tracker with RapidOCR ${{ env.RAPIDOCR_VERSION }}
+        run: pip install numpy opencv-python-headless "rapidocr-onnxruntime==${RAPIDOCR_VERSION}"
+      - name: ONNX Runtime for Linux
+        run: |
+          curl -sSL -o ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          tar xzf ort.tgz && mv "onnxruntime-linux-x64-${ORT_VERSION}" ort
+      - name: Build the test tools
+        run: |
+          S=native/src
+          g++ -O2 -std=c++17 -Inative/third_party -Iort/include -o ocr_check native/tests/ocr_check.cpp $S/ocr.cpp $S/image.cpp $S/scene.cpp -ldl
+          g++ -O2 -std=c++17 -Inative/third_party -Iort/include -o replay native/tests/replay.cpp $S/detector.cpp $S/store.cpp $S/text.cpp $S/ocr.cpp $S/image.cpp $S/scene.cpp -ldl
+      - name: Colour checks
+        run: python native/tests/compare_with_python.py
+      - name: Text rules
+        run: python native/tests/compare_text_with_python.py
+      - name: Text reading
+        run: |
+          MODELS=$(python -c "import rapidocr_onnxruntime, os; print(os.path.join(os.path.dirname(rapidocr_onnxruntime.__file__), 'models'))")
+          python native/tests/compare_ocr_with_python.py ./ocr_check ort/lib/libonnxruntime.so "$MODELS"
+      - name: Whole matches
+        run: |
+          MODELS=$(python -c "import rapidocr_onnxruntime, os; print(os.path.join(os.path.dirname(rapidocr_onnxruntime.__file__), 'models'))")
+          python native/tests/compare_detector_with_python.py ./replay ort/lib/libonnxruntime.so "$MODELS"
 
   windows:
     name: Build for Windows (OBS 31+)
@@ -29,13 +54,25 @@ jobs:
         working-directory: native
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Cache OBS sources and deps
         uses: actions/cache@v4
         with:
           path: native/.deps
           key: obs-deps-${{ hashFiles('native/buildspec.json') }}
+      - name: Get ONNX Runtime and the OCR models
+        run: |
+          Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/onnxruntime-win-x64-$env:ORT_VERSION.zip" -OutFile ort.zip
+          Expand-Archive ort.zip -DestinationPath .
+          Rename-Item "onnxruntime-win-x64-$env:ORT_VERSION" ort
+          pip download --no-deps --only-binary=:all: "rapidocr-onnxruntime==$env:RAPIDOCR_VERSION" -d whl
+          Copy-Item (Get-ChildItem whl/*.whl)[0].FullName rapidocr.zip
+          Expand-Archive rapidocr.zip -DestinationPath rapidocr
+          Get-ChildItem rapidocr/rapidocr_onnxruntime/models
       - name: Configure
-        run: cmake --preset windows-x64
+        run: cmake --preset windows-x64 "-DSF6_ORT_DIR=$PWD/ort" "-DSF6_MODELS_DIR=$PWD/rapidocr/rapidocr_onnxruntime/models"
       - name: Build
         run: cmake --build --preset windows-x64 --config RelWithDebInfo --parallel
       - name: Install into a folder layout OBS understands
@@ -43,14 +80,17 @@ jobs:
       - name: Add install notes
         run: |
           @"
-          SF6 Tracker (native prototype)  Made by WASURENE.
+          SF6 Tracker (native)  Made by WASURENE.
 
-          Install: copy the folder "sf6-tracker-native" into
+          Install: close OBS, then copy the folder "sf6-tracker-native" into
             C:\ProgramData\obs-studio\plugins\
           so that you get
             C:\ProgramData\obs-studio\plugins\sf6-tracker-native\bin\64bit\sf6-tracker-native.dll
-          then restart OBS. Right-click the SF6 game capture > Filters > + > "SF6 Tracker".
+          Start OBS. Right-click the SF6 game capture > Filters > + > "SF6 Tracker".
+          Control panel: http://127.0.0.1:17860/control   Overlay: http://127.0.0.1:17860/overlay
+          (Stop the Python tracker first: both use port 17860.)
           "@ | Set-Content -Encoding utf8 release/README.txt
+          Get-ChildItem -Recurse release | Select-Object FullName, Length
       - uses: actions/upload-artifact@v4
         with:
           name: sf6-tracker-native-windows

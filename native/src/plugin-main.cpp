@@ -23,6 +23,7 @@ OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 
 extern "C" void sf6_register_filter(void);
+extern "C" void sf6_shutdown(void);
 
 bool obs_module_load(void)
 {
@@ -33,5 +34,6 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
+	sf6_shutdown();
 	obs_log(LOG_INFO, "unloaded");
 }

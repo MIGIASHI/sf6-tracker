@@ -309,6 +309,7 @@ json default_config()
 {
 	// The keys of DEFAULT in sf6tracker/config.py that the native version uses or the pages show.
 	return json::parse(R"({
+  "obs": {"host": "127.0.0.1", "port": 4455, "password": "", "source": ""},
   "capture": {"width": 1280, "look_width": 640, "interval": 1.5},
   "server": {"port": 17860},
   "player": {"names": [], "chars": [], "side": "p1", "rating_label": "auto"},
