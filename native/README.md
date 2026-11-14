@@ -22,10 +22,13 @@ Python 版と同時には動かせません（どちらもポート 17860 を使
 ## 入れ方
 
 1. GitHub の Actions →「Native plugin」の最新の実行から `sf6-tracker-native-windows` をダウンロードして展開します。
-2. 中の `sf6-tracker-native` フォルダを `C:\ProgramData\obs-studio\plugins\` にコピーします。
-3. OBS を再起動し、SF6 のゲームキャプチャを右クリック →「フィルタ」→「＋」→「SF6 Tracker（ネイティブ試作）」。
+2. OBSを終了し、中の **`obs-plugins` と `data`** を、使用しているOBS本体のフォルダ（通常 `C:\Program Files\obs-studio\`）にコピーします。ポータブル版は `bin`・`data`・`obs-plugins` があるフォルダがコピー先です。
+3. `obs-plugins\64bit\sf6-tracker-native.dll` と `data\obs-plugins\sf6-tracker-native\web\input.html` があることを確認します。`obs-plugins` の中にさらに `obs-plugins` を入れないでください。
+4. OBS を再起動し、SF6 のゲームキャプチャを右クリック →「フィルタ」→「エフェクトフィルタ」の「＋」→「SF6 Tracker」。
 
-OBS 31 以降（33 で確認予定）の 64bit Windows 版向けです。
+以前のProgramData形式を入れている場合は、そちらをバックアップして外し、二重配置を避けてください。設定・対戦履歴の移動は不要です。
+
+OBS 31 以降の 64bit Windows 版向けです。CIでは公式OBS 32.2.2でDLLの読み込みとフィルター登録を検証します。
 
 ## 開発
 
