@@ -41,6 +41,13 @@ jobs:
           EXE=./http-build/input_check
           if [ "${{ runner.os }}" = Windows ]; then EXE=./http-build/Release/input_check.exe; fi
           "$EXE"
+      - name: Check 25-match retention in Python and native storage
+        shell: bash
+        run: |
+          python tests/test_store.py
+          EXE=./http-build/store_check
+          if [ "${{ runner.os }}" = Windows ]; then EXE=./http-build/Release/store_check.exe; fi
+          python tests/test_store.py "$EXE"
 
   same-as-python:
     name: Native recognition matches the Python tracker

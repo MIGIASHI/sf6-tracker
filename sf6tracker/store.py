@@ -10,6 +10,7 @@ import time
 
 FIELDS = ("ts", "result", "my_char", "opp_char", "rating", "delta", "rating_label",
           "my_pending", "opp_pending", "auto", "carried", "note", "side", "side_by", "rating_before", "rushes")
+HISTORY_LIMIT = 25
 
 
 class Store:
@@ -20,8 +21,12 @@ class Store:
         if os.path.exists(self.path):
             with open(self.path, encoding="utf-8") as f:
                 self.data.update(json.load(f))
+            if len(self.data["matches"]) > HISTORY_LIMIT:
+                self._save()
 
     def _save(self):
+        self.data["matches"].sort(key=lambda x: (x["ts"], x["id"]))
+        self.data["matches"] = self.data["matches"][-HISTORY_LIMIT:]
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=1)
@@ -53,7 +58,6 @@ class Store:
             m.update({k: v for k, v in fields.items() if k in FIELDS})
             self.data["next_id"] += 1
             self.data["matches"].append(m)
-            self.data["matches"].sort(key=lambda x: (x["ts"], x["id"]))
             self._save()
             return dict(m)
 

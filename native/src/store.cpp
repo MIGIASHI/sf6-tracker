@@ -18,6 +18,7 @@ namespace {
 const char *const kFields[] = {"ts",          "result",     "my_char", "opp_char", "rating", "delta",
 			       "rating_label", "my_pending", "opp_pending", "auto", "carried", "note",
 			       "side",         "side_by",    "rating_before", "rushes"};
+constexpr size_t kHistoryLimit = 25;
 
 fs::path to_path(const std::string &utf8)
 {
@@ -127,6 +128,8 @@ Store::Store(std::string data_dir) : path_((to_path(data_dir) / "history.json").
 			fs::copy_file(to_path(path_), to_path(path_ + ".broken"), fs::copy_options::overwrite_existing, ec);
 		}
 	}
+	if (data_["matches"].is_array() && data_["matches"].size() > kHistoryLimit)
+		save();
 }
 
 json Store::pick(const json &fields)
@@ -140,6 +143,13 @@ json Store::pick(const json &fields)
 
 void Store::save()
 {
+	auto &ms = data_["matches"];
+	std::stable_sort(ms.begin(), ms.end(), [](const json &a, const json &b) {
+		double ta = a.value("ts", 0.0), tb = b.value("ts", 0.0);
+		return ta != tb ? ta < tb : a.value("id", 0) < b.value("id", 0);
+	});
+	if (ms.size() > kHistoryLimit)
+		ms.erase(ms.begin(), ms.end() - ptrdiff_t(kHistoryLimit));
 	write_text_file_atomic(path_, data_.dump(1));
 }
 
@@ -182,11 +192,6 @@ json Store::add(const json &fields)
 		m[it.key()] = it.value();
 	data_["next_id"] = data_["next_id"].get<int>() + 1;
 	data_["matches"].push_back(m);
-	auto &ms = data_["matches"];
-	std::stable_sort(ms.begin(), ms.end(), [](const json &a, const json &b) {
-		double ta = a.value("ts", 0.0), tb = b.value("ts", 0.0);
-		return ta != tb ? ta < tb : a.value("id", 0) < b.value("id", 0);
-	});
 	save();
 	return m;
 }
@@ -200,8 +205,9 @@ std::optional<json> Store::update(int id, const json &fields)
 		json f = pick(fields);
 		for (auto it = f.begin(); it != f.end(); ++it)
 			m[it.key()] = it.value();
+		json updated = m;
 		save();
-		return m;
+		return updated;
 	}
 	return std::nullopt;
 }

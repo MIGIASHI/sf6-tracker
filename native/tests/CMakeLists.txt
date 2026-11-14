@@ -1,7 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 project(sf6_http_tests LANGUAGES CXX)
 
+add_executable(store_check store_check.cpp ../src/store.cpp)
+target_compile_features(store_check PRIVATE cxx_std_17)
+target_include_directories(store_check PRIVATE ../third_party)
+
 find_package(Threads REQUIRED)
+target_link_libraries(store_check PRIVATE Threads::Threads)
 add_executable(http_check http_check.cpp ../src/http.cpp)
 target_compile_features(http_check PRIVATE cxx_std_17)
 target_link_libraries(http_check PRIVATE Threads::Threads)
