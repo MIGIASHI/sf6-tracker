@@ -108,6 +108,16 @@ jobs:
         run: cmake --install build_x64 --prefix release --config RelWithDebInfo
       - name: Package for the OBS installation folder
         run: ./package-windows.ps1 -ReleaseDir release -OutputDir package
+      - name: Verify OCR startup with OBS DLL search policy and relative data paths
+        run: |
+          cmake --build --preset windows-x64 --config RelWithDebInfo --target ocr_load_check
+          if ($LASTEXITCODE -ne 0) { throw 'OCR test build failed' }
+          $ocrCheck = (Resolve-Path build_x64/tests/RelWithDebInfo/ocr_load_check.exe).Path
+          Push-Location package
+          try {
+            & $ocrCheck 'data/obs-plugins/sf6-tracker-native/ort/sf6-onnxruntime.dll' 'data/obs-plugins/sf6-tracker-native/models/ch_PP-OCRv4_det_infer.onnx' 'data/obs-plugins/sf6-tracker-native/models/ch_PP-OCRv4_rec_infer.onnx'
+            if ($LASTEXITCODE -ne 0) { throw 'OCR startup test failed' }
+          } finally { Pop-Location }
       - name: Verify plugin registration with OBS 32.2.2
         run: |
           Invoke-WebRequest 'https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-Windows-x64.zip' -OutFile obs-32.2.2.zip

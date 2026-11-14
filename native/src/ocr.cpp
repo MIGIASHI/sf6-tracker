@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 
@@ -30,10 +31,16 @@ const OrtApi *load_ort(const std::string &path, std::string &err)
 	using GetApiBase = const OrtApiBase *(ORT_API_CALL *)();
 	GetApiBase get = nullptr;
 #ifdef _WIN32
-	int n = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
-	std::wstring wpath(size_t(n > 0 ? n : 1), L'\0');
-	MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), n);
-	HMODULE lib = LoadLibraryExW(wpath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+	// OBS can supply a relative module data path and sets a restricted DLL search policy.
+	// LOAD_WITH_ALTERED_SEARCH_PATH + a relative path then fails with ERROR_INVALID_PARAMETER (87).
+	std::error_code ec;
+	const auto full = std::filesystem::absolute(std::filesystem::u8path(path), ec);
+	if (ec) {
+		err = "cannot resolve " + path + ": " + ec.message();
+		return nullptr;
+	}
+	HMODULE lib = LoadLibraryExW(full.c_str(), nullptr,
+				   LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 	if (!lib) {
 		err = "cannot load " + path + " (error " + std::to_string(GetLastError()) + ")";
 		return nullptr;
