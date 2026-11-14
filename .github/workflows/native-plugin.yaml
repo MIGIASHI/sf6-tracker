@@ -108,6 +108,8 @@ jobs:
         run: cmake --install build_x64 --prefix release --config RelWithDebInfo
       - name: Package for the OBS installation folder
         run: ./package-windows.ps1 -ReleaseDir release -OutputDir package
+      - name: Package for the ProgramData plugin folder
+        run: ./package-windows.ps1 -ReleaseDir release -OutputDir package-programdata -Layout programdata
       - name: Verify OCR startup with OBS DLL search policy and relative data paths
         run: |
           cmake --build --preset windows-x64 --config RelWithDebInfo --target ocr_load_check
@@ -128,3 +130,7 @@ jobs:
         with:
           name: sf6-tracker-native-windows
           path: native/package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sf6-tracker-native-windows-programdata
+          path: native/package-programdata
