@@ -77,12 +77,12 @@
     <label>押した色 <input type="color" data-k="on"></label>
     <label><input type="checkbox" data-k="color3">P/K を強さで色分け</label>
   </div>
-  <div class="g">
+  <div class="g" id="rushControls">
     <label><input type="checkbox" data-k="rush">ドライブラッシュを数える</label>
     <label>パリィのボタン <select data-k="parry"><option value="mpmk">中P＋中K</option><option value="e1">E1</option><option value="e2">E2</option></select></label>
   </div>
-  <div class="hint">「パリィ→前前」と「通常技のすぐあとの前前」をドライブラッシュとして数え、オーバーレイの「ドライブラッシュ」に試合ごとの平均を出します（対戦中の分だけ。入力から数えるので目安です）。数えるのは OBS に置いた入力表示だけで、この設定画面では数えません。</div>
-  <div class="hint">ボタンの割り当て：「設定」を押してから、コントローラーのそのボタンを押してください。名前も変えられます。</div>
+  <div class="hint" id="rushHint">「パリィ→前前」と「通常技のすぐあとの前前」をドライブラッシュとして数え、オーバーレイの「ドライブラッシュ」に試合ごとの平均を出します（対戦中の分だけ。入力から数えるので目安です）。数えるのは OBS に置いた入力表示だけで、この設定画面では数えません。</div>
+  <div class="hint" id="assignHint">ボタンの割り当て：「設定」を押してから、コントローラーのそのボタンを押してください。名前も変えられます。</div>
   <div class="map" id="map"></div>
   <div class="g" style="margin-top:8px"><button id="addButton">＋ ボタンを追加</button><button id="resetPositions">位置を初期値に戻す</button><button id="reset">割り当てを初期値に戻す</button></div>
   <div class="g"><button id="saveInput" class="pri">入力表示の設定を保存</button><span id="inputSaved" class="hint"></span></div>
@@ -492,6 +492,8 @@ function renderMap() {
   document.getElementById('map').innerHTML = S.map.map((b, i) => b < 0 ? '' : `<div class="slot"><input type="text" data-name="${i}" aria-label="ボタン${i + 1}の名前" value="${esc(n[i])}" maxlength="4">
     ${S.type === 'keyboard' ? `<select data-key="${i}" aria-label="ボタン${i+1}のキー">${keyboardOptions(b)}</select>` : `<span style="flex:1;color:#98a1b8">ボタン${S.map[i]}</span>`}<button data-assign="${i}" class="${waiting === i ? 'wait' : ''}">${waiting === i ? '押して…' : '設定'}</button><button data-remove="${i}" aria-label="ボタン${i + 1}を削除" ${active <= 1 ? 'disabled' : ''}>削除</button></div>`).join('');
   document.getElementById('padSel').parentElement.style.display = S.type === 'keyboard' ? 'none' : '';
+  for (const id of ['rushControls','rushHint']) document.getElementById(id).style.display = S.type === 'keyboard' ? 'none' : '';
+  document.getElementById('assignHint').textContent = S.type === 'keyboard' ? '「設定」のあとにキーを押すか、一覧からキー・マウスボタン・ホイールを選んでください。ホイールは一瞬点灯します。名前も変更できます。' : 'ボタンの割り当て：「設定」を押してから、コントローラーのそのボタンを押してください。名前も変えられます。';
 }
 let padIds = '';
 function updatePadList(pads) {
