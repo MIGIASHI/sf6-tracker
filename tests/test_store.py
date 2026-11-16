@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -40,6 +41,9 @@ class NativeStore:
     def matches(self): return self.call('matches')
     def last(self): return self.call('last')
     def new_session(self): return self.call('session')
+    def observe_character(self, char): return self.call('character', character=char)
+    def set_retention_hours(self, hours, now=None): return self.call('retention', hours=hours, now=time.time() if now is None else now)
+    def prune(self, now=None): return self.call('prune', now=time.time() if now is None else now)
 
 
 class StoreTests(unittest.TestCase):
@@ -52,28 +56,28 @@ class StoreTests(unittest.TestCase):
 
     def reload(self):
         if NATIVE: self.store.call('reload')
-        else: self.store = Store(self.tmp.name)
+        else: self.store = Store(self.tmp.name, self.store.retention_hours)
 
     def saved(self):
         with open(self.path, encoding='utf-8') as stream:
             return json.load(stream)
 
-    def test_26th_record_deletes_only_oldest_and_survives_reload(self):
+    def test_count_is_unlimited_and_survives_reload(self):
         for i in range(1, 27): self.store.add(ts=i, result='win')
-        self.assertEqual([m['id'] for m in self.store.matches()], list(range(2, 27)))
-        self.assertIsNone(self.store.get(1))
-        self.assertEqual(len(self.saved()['matches']), 25)
+        self.assertEqual([m['id'] for m in self.store.matches()], list(range(1, 27)))
+        self.assertIsNotNone(self.store.get(1))
+        self.assertEqual(len(self.saved()['matches']), 26)
         self.assertEqual(self.saved()['next_id'], 27)
         self.reload()
-        self.assertEqual([m['id'] for m in self.store.matches()], list(range(2, 27)))
+        self.assertEqual([m['id'] for m in self.store.matches()], list(range(1, 27)))
 
-    def test_existing_oversized_file_is_trimmed_on_load_without_backup(self):
+    def test_existing_file_is_not_trimmed_by_count(self):
         data = {'version': 1, 'session': {'id': 7, 'started': 1}, 'next_id': 41,
-                'matches': [{'id': i, 'ts': i, 'session': 7, 'result': 'win'} for i in range(40, 0, -1)]}
+                'matches': [{'id': i, 'ts': i, 'session': 7, 'result': 'win'} for i in range(1, 41)]}
         with open(self.path, 'w', encoding='utf-8') as stream: json.dump(data, stream)
         self.reload()
-        self.assertEqual([m['id'] for m in self.store.matches()], list(range(16, 41)))
-        self.assertEqual(len(self.saved()['matches']), 25)
+        self.assertEqual([m['id'] for m in self.store.matches()], list(range(1, 41)))
+        self.assertEqual(len(self.saved()['matches']), 40)
         self.assertEqual(self.saved()['session']['id'], 7)
         self.assertEqual(self.saved()['next_id'], 41)
         self.assertEqual(os.listdir(self.tmp.name), ['history.json'])
@@ -81,12 +85,12 @@ class StoreTests(unittest.TestCase):
     def test_backdated_addition_does_not_evict_a_newer_match(self):
         for i in range(1, 26): self.store.add(ts=1000+i)
         self.store.add(ts=0)
-        self.assertEqual([m['id'] for m in self.store.matches()], list(range(1, 26)))
+        self.assertEqual(len(self.store.matches()), 26)
         self.assertEqual(self.store.last()['id'], 25)
 
-    def test_same_timestamp_uses_id_to_keep_latest_25(self):
+    def test_same_timestamp_uses_id_without_count_limit(self):
         for _ in range(30): self.store.add(ts=100)
-        self.assertEqual([m['id'] for m in self.store.matches()], list(range(6, 31)))
+        self.assertEqual([m['id'] for m in self.store.matches()], list(range(1, 31)))
 
     def test_updates_remain_attached_to_the_correct_match_after_sort(self):
         for i in range(1, 26): self.store.add(ts=i)
@@ -97,13 +101,13 @@ class StoreTests(unittest.TestCase):
         self.reload()
         self.assertEqual(self.store.last()['id'], 1)
 
-    def test_limit_is_shared_across_sessions(self):
+    def test_sessions_do_not_impose_count_limit(self):
         for i in range(15): self.store.add(ts=i)
         self.store.new_session()
         for i in range(15, 30): self.store.add(ts=i)
         ms = self.store.matches()
-        self.assertEqual(len(ms), 25)
-        self.assertEqual(sum(m['session'] == 1 for m in ms), 10)
+        self.assertEqual(len(ms), 30)
+        self.assertEqual(sum(m['session'] == 1 for m in ms), 15)
         self.assertEqual(sum(m['session'] == 2 for m in ms), 15)
 
     def test_25_or_fewer_are_preserved(self):
@@ -114,6 +118,47 @@ class StoreTests(unittest.TestCase):
         self.reload()
         self.assertEqual([m['id'] for m in self.store.matches()], list(range(1, 26)))
         self.assertEqual(os.listdir(self.tmp.name), ['history.json'])
+
+    def test_retention_expires_old_rows_and_idle_pruning_works(self):
+        now = time.time()
+        self.store.add(ts=now-7200)
+        self.store.add(ts=now-1800)
+        self.store.add(ts=now-30)
+        self.store.set_retention_hours(1, now=now)
+        self.assertEqual([m['id'] for m in self.store.matches()], [2,3])
+        self.reload()
+        self.assertEqual([m['id'] for m in self.store.matches()], [2,3])
+        self.store.prune(now=now+3601)
+        self.assertEqual(self.store.matches(), [])
+        self.assertEqual(self.saved()['next_id'], 4)
+        self.assertEqual(os.listdir(self.tmp.name), ['history.json'])
+
+    def test_zero_retention_does_not_expire_rows(self):
+        self.store.add(ts=1)
+        self.store.set_retention_hours(0)
+        self.store.prune(now=time.time()+999999)
+        self.assertEqual(len(self.store.matches()), 1)
+
+    def test_character_change_clears_all_history_once_and_preserves_ids(self):
+        self.store.add(ts=1, my_char='ryu')
+        self.assertFalse(self.store.observe_character('ryu'))
+        self.assertFalse(self.store.observe_character('ryu'))
+        self.assertTrue(self.store.observe_character('juri'))
+        self.assertEqual(self.store.matches(), [])
+        self.assertEqual(self.saved()['session']['id'], 2)
+        self.reload()
+        self.assertFalse(self.store.observe_character('juri'))
+        self.assertEqual(self.saved()['session']['id'], 2)
+        rec = self.store.add(ts=2, my_char='juri')
+        self.assertEqual(rec['id'], 2)
+        self.assertEqual(os.listdir(self.tmp.name), ['history.json'])
+
+    def test_character_change_after_manual_session_still_clears_history(self):
+        self.store.add(ts=1, my_char='ryu')
+        self.store.observe_character('ryu')
+        self.store.new_session()
+        self.assertTrue(self.store.observe_character('juri'))
+        self.assertEqual(self.store.matches(), [])
 
 
 if __name__ == '__main__': unittest.main()

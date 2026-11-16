@@ -109,6 +109,24 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual((rec['side'], rec['opp_char']), ('p2', 'juri'))
         self.assertEqual(len(self.store.matches()), 2)
 
+    def test_character_reset_ignores_side_and_opponent_changes(self):
+        self.det.m = observed(side='p2', opp='juri')
+        self.det._sf6_track_character()
+        self.assertEqual(len(self.store.matches()), 1)
+        self.det.m = observed(char='juri', votes=1)
+        self.det._sf6_track_character()
+        self.assertEqual(len(self.store.matches()), 1)
+        self.det.m = observed(char='juri')
+        self.det._sf6_track_character()
+        self.assertEqual(self.store.matches(), [])
+        self.assertIsNone(self.det.recovery)
+
+    def test_character_reset_can_be_disabled(self):
+        self.det.cfg.update({'history': {'reset_on_character_change': False}})
+        self.det.m = observed(char='juri')
+        self.det._sf6_track_character()
+        self.assertEqual(len(self.store.matches()), 1)
+
 
 if __name__ == '__main__':
     unittest.main()
