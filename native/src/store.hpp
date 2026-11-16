@@ -17,7 +17,10 @@ json jget(const json &obj, const char *key); // obj[key], or null when missing
 
 class Store {
 public:
-	explicit Store(std::string data_dir);
+	explicit Store(std::string data_dir, double retention_hours = 0);
+	void set_retention_hours(double hours, double now = now_seconds());
+	void prune(double now = now_seconds());
+	bool observe_character(const std::string &character);
 
 	int session_id() const;
 	json matches() const;
@@ -32,11 +35,13 @@ public:
 
 private:
 	void save();
+	bool expire(double now);
 	static json pick(const json &fields);
 
 	std::string path_;
 	mutable std::recursive_mutex mutex_;
 	json data_;
+	double retention_hours_ = 0;
 };
 
 // Numbers for the overlay from a list of matches (oldest first), like store.summarize.
@@ -48,6 +53,7 @@ public:
 	json get() const;
 	json section(const char *name) const;
 	void update(const json &patch);
+	void set_input_display(const json &settings);
 
 private:
 	void save();

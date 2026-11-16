@@ -18,6 +18,43 @@
 namespace sf6 {
 using json = nlohmann::json;
 
+#ifdef _WIN32
+namespace {
+std::atomic<ULONGLONG> wheel_until[4]{};
+std::atomic<ULONGLONG> wheel_requested_until{0};
+LRESULT CALLBACK wheel_hook(int code, WPARAM message, LPARAM data)
+{
+	if (code >= 0 && (message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL)) {
+		auto *event = reinterpret_cast<MSLLHOOKSTRUCT *>(data);
+		short delta = short(event->mouseData >> 16);
+		int direction = message == WM_MOUSEWHEEL ? (delta > 0 ? 0 : 1) : (delta > 0 ? 3 : 2);
+		if (delta) wheel_until[direction] = GetTickCount64() + 120;
+	}
+	return CallNextHookEx(nullptr, code, message, data);
+}
+}
+#endif
+
+json read_keys(const json &codes)
+{
+	json pressed = json::array();
+#ifdef _WIN32
+	if (codes.is_array() && codes.size() <= 32)
+		for (const auto &code : codes) {
+			if (!code.is_number_integer()) continue;
+			int key = code.get<int>();
+			if (key >= 256 && key <= 259) {
+				wheel_requested_until = GetTickCount64() + 2000;
+				if (GetTickCount64() < wheel_until[key-256].load()) pressed.push_back(key);
+			} else if (key > 0 && key < 255 && (GetAsyncKeyState(key) & 0x8000)) pressed.push_back(key);
+		}
+	return {{"supported", true}, {"pressed", pressed}};
+#else
+	(void)codes;
+	return {{"supported", false}, {"pressed", pressed}};
+#endif
+}
+
 json hat_direction(uint32_t pov)
 {
 	if ((pov & 0xffff) == 0xffff)
@@ -150,7 +187,7 @@ struct Joysticks {
 				buttons.push_back({{"pressed", (button & 0x80) != 0}, {"value", (button & 0x80) ? 1 : 0}});
 			auto axis = [](LONG value) { return std::clamp(value / 32767.0, -1.0, 1.0); };
 			pads.push_back({{"index", device.index}, {"id", device.name}, {"mapping", ""},
-				       {"buttons", buttons}, {"axes", {axis(state.lX), axis(state.lY)}},
+				       {"buttons", buttons}, {"axes", {axis(state.lX), axis(state.lY), axis(state.lZ), axis(state.lRz)}},
 				       {"direction", hat_direction(state.rgdwPOV[0])}});
 		}
 	}
@@ -164,12 +201,21 @@ void InputCapture::loop()
 	const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 	{
 		Joysticks sticks;
+		HHOOK wheel = nullptr;
 		sticks.window = CreateWindowExW(0, L"STATIC", L"SF6 Tracker input", WS_POPUP,
 					      0, 0, 0, 0, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
 		DirectInput8Create(GetModuleHandleW(nullptr), DIRECTINPUT_VERSION, IID_IDirectInput8W,
 				  reinterpret_cast<void **>(&sticks.di), nullptr);
 		auto next_scan = std::chrono::steady_clock::time_point{};
 		while (running_) {
+			if (!wheel && GetTickCount64() < wheel_requested_until.load()) {
+				HMODULE module = nullptr;
+				GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+						   reinterpret_cast<LPCWSTR>(&wheel_hook), &module);
+				wheel = SetWindowsHookExW(WH_MOUSE_LL, wheel_hook, module, 0);
+			} else if (wheel && GetTickCount64() >= wheel_requested_until.load()) {
+				UnhookWindowsHookEx(wheel); wheel = nullptr;
+			}
 			auto now = std::chrono::steady_clock::now();
 			if (now >= next_scan) { sticks.refresh(); next_scan = now + std::chrono::seconds(2); }
 			MSG message;
@@ -188,6 +234,7 @@ void InputCapture::loop()
 			pads_ = std::move(pads);
 			wake_.wait_for(lock, std::chrono::milliseconds(8), [this] { return !running_.load(); });
 		}
+		if (wheel) UnhookWindowsHookEx(wheel);
 	}
 	if (SUCCEEDED(com)) CoUninitialize();
 #endif
