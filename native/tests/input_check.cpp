@@ -3,17 +3,56 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 void check(bool ok, const char *message)
 {
 	if (!ok) throw std::runtime_error(message);
 }
 
-int main(int argc, char **)
+int main(int argc, char **argv)
 {
 	using sf6::standard_pad;
 	using sf6::hat_direction;
 	using json = nlohmann::json;
+	if (argc > 1 && std::string(argv[1]) == "--wheel-test") {
+#ifdef _WIN32
+		sf6::InputCapture input;
+		input.start();
+		for (int i = 0; i < 100; ++i) {
+			sf6::read_keys({256});
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		INPUT key{};
+		key.type = INPUT_KEYBOARD; key.ki.wVk = 90;
+		check(SendInput(1, &key, sizeof(key)) == 1, "keyboard input injection failed on CI desktop");
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		bool key_seen = sf6::read_keys({90})["pressed"] == json({90});
+		key.ki.dwFlags = KEYEVENTF_KEYUP;
+		SendInput(1, &key, sizeof(key));
+		check(key_seen, "selected background keyboard state missing");
+		INPUT event{};
+		event.type = INPUT_MOUSE;
+		event.mi.dwFlags = MOUSEEVENTF_WHEEL;
+		event.mi.mouseData = WHEEL_DELTA;
+		check(SendInput(1, &event, sizeof(event)) == 1, "wheel input injection failed on CI desktop");
+		bool seen = false;
+		for (int i = 0; i < 20; ++i) {
+			auto pressed = sf6::read_keys({256})["pressed"];
+			if (pressed == json({256})) { seen = true; break; }
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+		check(seen, "background mouse wheel was not captured");
+		check(sf6::read_keys({65})["pressed"].empty(), "unselected wheel leaked into key state");
+		std::this_thread::sleep_for(std::chrono::milliseconds(150));
+		check(sf6::read_keys({256})["pressed"].empty(), "wheel pulse did not expire");
+		input.stop();
+		std::cout << "Background wheel hook, selected-code filtering and pulse expiry OK" << std::endl;
+#endif
+		return 0;
+	}
 	if (argc > 1) {
 		sf6::InputCapture input;
 		input.start();

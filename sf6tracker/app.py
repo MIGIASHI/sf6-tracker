@@ -18,7 +18,7 @@ from .store import Store, summarize
 class App:
     def __init__(self, data_dir, source_file=None):
         self.cfg = Config(data_dir)
-        self.store = Store(data_dir)
+        self.store = Store(data_dir, self.cfg['history']['retention_hours'])
         self.lib = Library(data_dir)
         self.ocr = vision.Ocr()
         self.detector = Detector(self.cfg, self.store, self.lib, self.ocr)
@@ -65,6 +65,7 @@ class App:
         sf6 = lambda: self.cfg["detect"].get("layout", "sf6") == "sf6"
         while self.running:
             t0 = time.time()
+            self.store.prune()
             # a result screen can be gone within a second: look more often while one is due or showing
             interval = self.detector.hurry or float(self.cfg["capture"]["interval"])
             try:

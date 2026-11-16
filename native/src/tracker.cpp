@@ -6,6 +6,7 @@
 #include <ctime>
 #include <filesystem>
 #include <regex>
+#include <sstream>
 
 #include "http.hpp"
 #include "text.hpp"
@@ -91,7 +92,8 @@ std::string encode_bmp(const Image &img)
 	return out;
 }
 
-Tracker::Tracker(TrackerPaths paths) : paths_(std::move(paths)), cfg_(paths_.data_dir), store_(paths_.data_dir) {}
+Tracker::Tracker(TrackerPaths paths) : paths_(std::move(paths)), cfg_(paths_.data_dir),
+	store_(paths_.data_dir, cfg_.section("history").value("retention_hours", 0.0)) {}
 
 Tracker::~Tracker()
 {
@@ -141,6 +143,22 @@ bool Tracker::start(int port_override)
 				return json_response(status());
 			if (p == "/api/input")
 				return json_response(input_.snapshot());
+			if (p == "/api/input-settings")
+				return json_response(cfg_.section("input_display"));
+			if (p == "/api/keys") {
+				json codes = json::array();
+				std::istringstream stream(req.param("codes"));
+				std::string item;
+				static const std::regex valid("[0-9]{1,3}");
+				while (std::getline(stream, item, ',')) {
+					if (!std::regex_match(item, valid) || codes.size() >= 32)
+						return json_response({{"error", "invalid key codes"}}, 400);
+					int code = std::stoi(item);
+					if (code < 1 || code > 259 || code == 255) return json_response({{"error", "invalid key code"}}, 400);
+					codes.push_back(code);
+				}
+				return json_response(read_keys(codes));
+			}
 			if (p == "/api/matches")
 				return json_response(matches_decorated());
 			if (p == "/api/config")
@@ -186,9 +204,20 @@ bool Tracker::start(int port_override)
 			}
 		}
 		if (p == "/api/config") {
+			if (!data.is_object() || (data.contains("history") && !data["history"].is_object()))
+				return json_response({{"error", "invalid settings"}}, 400);
+			json hours = jget(jget(data, "history"), "retention_hours");
+			if (!hours.is_null() && (!hours.is_number() || hours.get<double>() < 0 || hours.get<double>() > 87600))
+				return json_response({{"error", "invalid retention hours"}}, 400);
 			if (data.is_object())
 				data.erase("roster");
 			update_config(data);
+			return json_response({{"ok", true}});
+		}
+		if (p == "/api/input-settings") {
+			if (!data.is_object() || data.dump().size() > 16384)
+				return json_response({{"error", "invalid input settings"}}, 400);
+			cfg_.set_input_display(data);
 			return json_response({{"ok", true}});
 		}
 		if (p == "/api/matches")
@@ -266,6 +295,7 @@ void Tracker::loop()
 #endif
 	std::vector<uint8_t> bgra;
 	while (running_) {
+		store_.prune();
 		auto t0 = std::chrono::steady_clock::now();
 		double interval;
 		{
@@ -421,6 +451,7 @@ json Tracker::config_with_roster()
 void Tracker::update_config(const json &patch)
 {
 	cfg_.update(patch);
+	store_.set_retention_hours(cfg_.section("history").value("retention_hours", 0.0));
 }
 
 json Tracker::matches_decorated()

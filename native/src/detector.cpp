@@ -290,8 +290,88 @@ void Detector::settle_previous(const std::optional<RatingKey> &r, const std::str
 		store_.update(jget(*last, "id").get<int>(), {{"rating", r->first}, {"delta", r->first - b}});
 }
 
+void Detector::track_character()
+{
+	if (!m_ || jget(jget(c_, "history"), "reset_on_character_change") == json(false) ||
+	    (m_->you < 2 && m_->named < 2)) return;
+	auto side = m_->side.top(2);
+	auto character = side ? m_->chars[idx(*side)].top(2) : std::nullopt;
+	if (character && store_.observe_character(*character)) {
+		recovery_.reset(); active_.reset(); last_record_ = 0;
+		recovery_session_ = store_.session_id();
+	}
+}
+
+void Detector::arm_recovery()
+{
+	if (active_ || !m_ || m_->hud_seen <= 0 || (m_->you < 2 && m_->named < 2))
+		return;
+	auto my = m_->side.top(2);
+	if (!my) return;
+	auto mc = m_->chars[idx(*my)].top(2), oc = m_->chars[idx(other(*my))].top(2);
+	auto r = my_rating(m_->rating[idx(*my)], 2);
+	if (!mc || !oc || !r) return;
+	if (recovery_) {
+		// No rating change can identify the previous result. Follow the next confirmed battle instead.
+		if (recovery_->candidate || recovery_->before != *r ||
+		    (recovery_->fields["side"] == json(*my) && recovery_->fields["my_char"] == json(*mc) &&
+		     recovery_->fields["opp_char"] == json(*oc))) return;
+	}
+	auto last = store_.last();
+	Recovery a;
+	a.before = *r;
+	a.session = store_.session_id();
+	a.started = m_->hud_seen;
+	a.last_id = last ? jget(*last, "id") : json(nullptr);
+	a.fields = {{"auto", true}, {"side", *my}, {"side_by", "rating"}, {"my_char", *mc}, {"opp_char", *oc},
+		    {"rating_before", r->first}, {"rating_label", r->second}, {"note", "レート変動から補完（勝敗画面未検出）"}};
+	recovery_ = std::move(a);
+	m_->hud_next = std::min(m_->hud_next, m_->hud_seen + 5);
+}
+
+std::optional<json> Detector::recover_rating(const Match &probe, double now)
+{
+	if (!recovery_) return std::nullopt;
+	auto last = store_.last();
+	if (recovery_->session != store_.session_id() || now - recovery_->started > 900 ||
+	    (last ? jget(*last, "id") : json(nullptr)) != recovery_->last_id) {
+		recovery_.reset();
+		return std::nullopt;
+	}
+	auto side = probe.side.top();
+	auto mc = side ? probe.chars[idx(*side)].top() : std::nullopt;
+	auto r = side ? my_rating(probe.rating[idx(*side)]) : std::nullopt;
+	if (!side || !mc || !r || (!probe.you && !probe.named)) {
+		recovery_->candidate.reset(); recovery_->confirmations = 0;
+		return std::nullopt;
+	}
+	if (json(*mc) != recovery_->fields["my_char"] || r->second != recovery_->before.second) {
+		recovery_.reset();
+		return std::nullopt;
+	}
+	int delta = r->first - recovery_->before.first;
+	if (!delta || std::abs(delta) > 1500) {
+		recovery_->candidate.reset(); recovery_->confirmations = 0;
+		return std::nullopt;
+	}
+	if (recovery_->candidate == r) ++recovery_->confirmations;
+	else { recovery_->candidate = r; recovery_->confirmations = 1; }
+	if (recovery_->confirmations < 3) return std::nullopt;
+	json fields = recovery_->fields;
+	recovery_.reset();
+	if (last && jget(*last, "my_char") == fields["my_char"] && jget(*last, "rating_label") == fields["rating_label"] &&
+	    jget(*last, "rating") == json(r->first)) return std::nullopt;
+	fields["ts"] = now;
+	fields["rating"] = r->first;
+	fields["delta"] = delta;
+	fields["result"] = delta > 0 ? "win" : "lose";
+	last_record_ = now;
+	return store_.add(fields);
+}
+
 json Detector::record(const std::string &p1res, double now)
 {
+	recovery_.reset(); // the result screen was caught: never add a second record from its rating change
 	auto [my, by] = side_now();
 	const std::string opp = other(my);
 	std::string result = my == "p1" ? p1res : flip(p1res);
@@ -371,8 +451,15 @@ void Detector::result_rating(FrameContext &ctx, double now)
 std::optional<json> Detector::process(const Frame &look, const Image &full, double now)
 {
 	c_ = cfg_.get();
+	if (recovery_session_ != store_.session_id()) {
+		recovery_session_ = store_.session_id();
+		recovery_.reset();
+		m_.reset();
+	}
 	auto ctx = std::make_unique<FrameContext>(look, full, ocr_, last_ctx_.get());
 	std::optional<json> event;
+	if (recovery_ && (recovery_->session != store_.session_id() || now - recovery_->started > 900))
+		recovery_.reset();
 	bool vs = false;
 	if (m_ && now - std::max(m_->seen, m_->hud_seen) > 900)
 		m_.reset();
@@ -422,6 +509,7 @@ std::optional<json> Detector::process(const Frame &look, const Image &full, doub
 				Match probe = new_match(now);
 				for (const char *s : {"p1", "p2"})
 					take(probe, ctx->region(std::string("hud_") + s), s);
+				event = recover_rating(probe, now);
 				std::optional<std::string> nw[2] = {probe.chars[0].top(), probe.chars[1].top()};
 				if (probe.you || nw[0] || nw[1]) { // really the battle HUD
 					if (m_) {
@@ -445,7 +533,7 @@ std::optional<json> Detector::process(const Frame &look, const Image &full, doub
 						m_ = new_match(now);
 					m_->seen = m_->hud_seen = now;
 					m_->hud_reads++;
-					m_->hud_next = now + 30;
+					m_->hud_next = now + (recovery_ ? (recovery_->candidate ? 0.5 : 5) : 30);
 					for (const char *s : {"p1", "p2"})
 						take(*m_, ctx->region(std::string("hud_") + s), s);
 				}
@@ -464,6 +552,9 @@ std::optional<json> Detector::process(const Frame &look, const Image &full, doub
 				m_->vs_reads++;
 				take(*m_, ctx->region("vs_band"), nullptr);
 			}
+			Match probe = new_match(now);
+			take(probe, ctx->region("vs_band"), nullptr);
+			event = recover_rating(probe, now);
 		} else if (!m_ && now >= card_next_) {
 			auto last = store_.last();
 			if (last && jget(*last, "rating").is_null() && !jget(*last, "rating_before").is_null() &&
@@ -476,12 +567,14 @@ std::optional<json> Detector::process(const Frame &look, const Image &full, doub
 					settle_previous(my_rating(probe.rating[1]), "", now);
 			}
 		}
+		track_character();
 		if (m_ && !m_->linked && complete(*m_)) {
 			m_->linked = true;
 			std::string my = *m_->side.top();
 			auto mc = m_->chars[idx(my)].top();
 			settle_previous(my_rating(m_->rating[idx(my)], 2), mc ? *mc : "", now);
 		}
+		arm_recovery();
 	}
 
 	std::string my, my_by;

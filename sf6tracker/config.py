@@ -17,6 +17,8 @@ DEFAULT = {
     # chars: characters I use (second clue). side: used only when neither clue works.
     "player": {"names": [], "chars": [], "side": "p1", "rating_label": "auto"},  # rating_label: auto / MR / LP
     "display": {"char_lang": "ja"},
+    "history": {"retention_hours": 0, "reset_on_character_change": True},
+    "input_display": {},
     "rois": {"vs": None, "result": None, "rating": None, "p1_char": None, "p2_char": None,
              "p1_name": None, "p2_name": None},
     "signals": {

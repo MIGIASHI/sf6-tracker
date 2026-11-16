@@ -191,6 +191,8 @@ class Detector:
         self.vs_next = 0.0
         self.hurry = 0.0         # seconds until the next look when it must come sooner than usual (0 = no hurry)
         self.rush_seen = 0.0     # last time the input display said it is counting Drive Rushes
+        self.recovery = None     # a confirmed battle whose result screen may be missed
+        self.recovery_session = store.session_id
 
     # ---- single-frame checks -------------------------------------------------
     def roi(self, name):
@@ -524,7 +526,77 @@ class Detector:
         if now - last["ts"] < 1800 and 0 < abs(r[0] - before) <= 1500:
             self.store.update(last["id"], rating=r[0], delta=r[0] - before)
 
+    def _sf6_track_character(self):
+        m = self.m
+        if not m or not self.cfg['history'].get('reset_on_character_change', True) or (m['you'] < 2 and m['named'] < 2):
+            return
+        side = _top(m['side'], 2)
+        character = _top(m['chars'][side], 2) if side else None
+        if character and self.store.observe_character(character):
+            self.recovery = self.active = None
+            self.last_record = None
+            self.recovery_session = self.store.session_id
+
+    def _sf6_arm_recovery(self):
+        m = self.m
+        if self.active or not m or not m["hud_seen"] or (m["you"] < 2 and m["named"] < 2):
+            return
+        my = _top(m["side"], 2)
+        if not my:
+            return
+        mc, oc = _top(m["chars"][my], 2), _top(m["chars"]["p2" if my == "p1" else "p1"], 2)
+        r = _my_rating(m["rating"][my], 2)
+        if not (mc and oc and r):
+            return
+        if self.recovery:
+            a = self.recovery
+            if a["candidate"] or a["before"] != r or \
+                    (a["fields"]["side"], a["fields"]["my_char"], a["fields"]["opp_char"]) == (my, mc, oc):
+                return
+        last = self.store.last()
+        self.recovery = {"before": r, "session": self.store.session_id, "started": m["hud_seen"],
+                         "last_id": last["id"] if last else None, "candidate": None, "confirmations": 0,
+                         "fields": {"auto": True, "side": my, "side_by": "rating", "my_char": mc, "opp_char": oc,
+                                    "rating_before": r[0], "rating_label": r[1],
+                                    "note": "レート変動から補完（勝敗画面未検出）"}}
+        m["hud_next"] = min(m["hud_next"], m["hud_seen"] + 5)
+
+    def _sf6_recover_rating(self, probe, now):
+        a = self.recovery
+        if not a:
+            return
+        last = self.store.last()
+        if a["session"] != self.store.session_id or now - a["started"] > 900 or \
+                (last["id"] if last else None) != a["last_id"]:
+            self.recovery = None
+            return
+        side = _top(probe["side"])
+        mc = _top(probe["chars"][side]) if side else None
+        r = _my_rating(probe["rating"][side]) if side else None
+        if not (side and mc and r and (probe["you"] or probe["named"])):
+            a.update(candidate=None, confirmations=0)
+            return
+        if mc != a["fields"]["my_char"] or r[1] != a["before"][1]:
+            self.recovery = None
+            return
+        delta = r[0] - a["before"][0]
+        if not 0 < abs(delta) <= 1500:
+            a.update(candidate=None, confirmations=0)
+            return
+        a["confirmations"] = a["confirmations"] + 1 if a["candidate"] == r else 1
+        a["candidate"] = r
+        if a["confirmations"] < 3:
+            return
+        fields = a["fields"]
+        self.recovery = None
+        if last and last.get("my_char") == fields["my_char"] and last.get("rating_label") == fields["rating_label"] \
+                and last.get("rating") == r[0]:
+            return
+        self.last_record = now
+        return self.store.add(**fields, ts=now, rating=r[0], delta=delta, result="win" if delta > 0 else "lose")
+
     def _sf6_record(self, p1res, now):
+        self.recovery = None
         my, by = self._sf6_side()
         opp = "p2" if my == "p1" else "p1"
         result = p1res if my == "p1" else ("lose" if p1res == "win" else "win")
@@ -579,12 +651,17 @@ class Detector:
 
     def _process_sf6(self, frame, now, fetch=None):
         d = self.cfg["detect"]
+        if self.recovery_session != self.store.session_id:
+            self.recovery_session = self.store.session_id
+            self.recovery = self.m = None
         ctx = FrameContext(frame, self.ocr, self._last_ctx, fetch)
         self._last_ctx = ctx
         m = self.m
         if m and now - max(m["seen"], m["hud_seen"]) > 900:
             m = self.m = None
         event, vs = None, False
+        if self.recovery and (self.recovery["session"] != self.store.session_id or now - self.recovery["started"] > 900):
+            self.recovery = None
         self.hurry = 0.0
         # Two colour checks on the (small) picture decide whether anything gets read at all.
         # During a battle nothing does, apart from a look at the HUD now and then.
@@ -628,6 +705,7 @@ class Detector:
                     probe = self._new_match(now)
                     for s in ("p1", "p2"):
                         self._sf6_take(probe, ctx.region("hud_" + s), s)
+                    event = self._sf6_recover_rating(probe, now)
                     new = {s: _top(probe["chars"][s]) for s in ("p1", "p2")}
                     if probe["you"] or any(new.values()):  # really the battle HUD
                         if m:
@@ -642,7 +720,7 @@ class Detector:
                             m = self.m = self._new_match(now)
                         m["seen"] = m["hud_seen"] = now
                         m["hud_reads"] += 1
-                        m["hud_next"] = now + 30
+                        m["hud_next"] = now + ((0.5 if self.recovery["candidate"] else 5) if self.recovery else 30)
                         for s in ("p1", "p2"):
                             self._sf6_take(m, ctx.region("hud_" + s), s)
             elif m and now - m["hud_seen"] < 40:
@@ -657,6 +735,9 @@ class Detector:
                 if m["vs_reads"] < 4:
                     m["vs_reads"] += 1
                     self._sf6_take(m, ctx.region("vs_band"))
+                probe = self._new_match(now)
+                self._sf6_take(probe, ctx.region("vs_band"))
+                event = self._sf6_recover_rating(probe, now)
             elif m is None and now >= self.card_next:
                 last = self.store.last()
                 if last and last.get("rating") is None and last.get("rating_before") is not None \
@@ -667,10 +748,12 @@ class Detector:
                     self._sf6_take(probe, ctx.region("hud_p2"), "p2")
                     if probe["named"] or not [n for n in self.cfg["player"].get("names", []) if n.strip()]:
                         self._sf6_settle_previous(_my_rating(probe["rating"]["p2"]), None, now)
+            self._sf6_track_character()
             if m and not m["linked"] and self._sf6_complete(m):
                 m["linked"] = True
                 my = m["side"].most_common(1)[0][0]
                 self._sf6_settle_previous(_my_rating(m["rating"][my], 2), _top(m["chars"][my]), now)
+            self._sf6_arm_recovery()
 
         my, my_by = self._sf6_side() if not self.active else (self.active["side"], "recorded")
         mine = None if not p1res else (p1res if my == "p1" else ("lose" if p1res == "win" else "win"))
