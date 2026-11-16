@@ -126,7 +126,7 @@ jobs:
           Expand-Archive rapidocr.zip -DestinationPath rapidocr
           Get-ChildItem rapidocr/rapidocr_onnxruntime/models
       - name: Configure
-        run: cmake --preset windows-x64 "-DSF6_ORT_DIR=$PWD/ort" "-DSF6_MODELS_DIR=$PWD/rapidocr/rapidocr_onnxruntime/models" -DENABLE_FRONTEND_API=ON -DWASURENE_UPDATER_TESTING=${{ github.ref != 'refs/heads/main' && 'ON' || 'OFF' }}
+        run: cmake --preset windows-x64 "-DSF6_ORT_DIR=$PWD/ort" "-DSF6_MODELS_DIR=$PWD/rapidocr/rapidocr_onnxruntime/models" -DENABLE_FRONTEND_API=ON -DWASURENE_UPDATER_TESTING=${{ github.ref == 'refs/heads/feat/plugin-updater' && 'ON' || 'OFF' }}
       - name: Build
         run: cmake --build --preset windows-x64 --config RelWithDebInfo --parallel
       - name: Install into a folder layout OBS understands
