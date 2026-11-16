@@ -156,6 +156,10 @@ jobs:
           Invoke-WebRequest 'https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-Windows-x64.zip' -OutFile obs-32.2.2.zip
           if ((Get-FileHash obs-32.2.2.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1') { throw 'OBS archive hash mismatch' }
           Expand-Archive obs-32.2.2.zip -DestinationPath obs-32.2.2
+          cmake --build --preset windows-x64 --config RelWithDebInfo --target wasurene-import-check
+          if ($LASTEXITCODE -ne 0) { throw 'Import check build failed' }
+          & build_x64/updater/RelWithDebInfo/wasurene-import-check.exe "$PWD/obs-32.2.2/bin/64bit" "$PWD/package/obs-plugins/64bit/sf6-tracker-native.dll"
+          if ($LASTEXITCODE -ne 0) { throw 'Plain Win32 plugin imports failed' }
           python tests/check_obs_module.py obs-32.2.2 package
       - uses: actions/upload-artifact@v4
         with:
