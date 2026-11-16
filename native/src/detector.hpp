@@ -124,6 +124,7 @@ private:
 	json record(const std::string &p1res, double now);
 	void result_rating(FrameContext &ctx, double now);
 	void arm_recovery();
+	void track_character();
 	std::optional<json> recover_rating(const Match &probe, double now);
 
 	Config &cfg_;

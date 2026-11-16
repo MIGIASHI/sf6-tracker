@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iterator>
 #include <sstream>
+#include <stdexcept>
 
 namespace fs = std::filesystem;
 
@@ -18,7 +19,6 @@ namespace {
 const char *const kFields[] = {"ts",          "result",     "my_char", "opp_char", "rating", "delta",
 			       "rating_label", "my_pending", "opp_pending", "auto", "carried", "note",
 			       "side",         "side_by",    "rating_before", "rushes"};
-constexpr size_t kHistoryLimit = 25;
 
 fs::path to_path(const std::string &utf8)
 {
@@ -110,7 +110,8 @@ void make_dirs(const std::string &dir)
 
 // ---- Store ------------------------------------------------------------------
 
-Store::Store(std::string data_dir) : path_((to_path(data_dir) / "history.json").u8string())
+Store::Store(std::string data_dir, double retention_hours)
+	: path_((to_path(data_dir) / "history.json").u8string()), retention_hours_(retention_hours)
 {
 	data_ = {{"version", 1},
 		 {"session", {{"id", 1}, {"started", now_seconds()}}},
@@ -128,8 +129,54 @@ Store::Store(std::string data_dir) : path_((to_path(data_dir) / "history.json").
 			fs::copy_file(to_path(path_), to_path(path_ + ".broken"), fs::copy_options::overwrite_existing, ec);
 		}
 	}
-	if (data_["matches"].is_array() && data_["matches"].size() > kHistoryLimit)
+	prune();
+}
+
+bool Store::expire(double now)
+{
+	if (retention_hours_ <= 0) return false;
+	auto &ms = data_["matches"];
+	auto size = ms.size();
+	ms.erase(std::remove_if(ms.begin(), ms.end(), [&](const json &m) {
+		return m.value("ts", 0.0) < now - retention_hours_ * 3600;
+	}), ms.end());
+	return ms.size() != size;
+}
+
+void Store::prune(double now)
+{
+	std::lock_guard<std::recursive_mutex> lock(mutex_);
+	if (expire(now)) write_text_file_atomic(path_, data_.dump(1));
+}
+
+void Store::set_retention_hours(double hours, double now)
+{
+	if (!std::isfinite(hours) || hours < 0 || hours > 87600) throw std::invalid_argument("Invalid retention hours");
+	std::lock_guard<std::recursive_mutex> lock(mutex_);
+	retention_hours_ = hours;
+	prune(now);
+}
+
+bool Store::observe_character(const std::string &character)
+{
+	if (character.empty()) return false;
+	std::lock_guard<std::recursive_mutex> lock(mutex_);
+	std::string before = data_["session"].value("character", "");
+	if (before.empty())
+		for (auto it = data_["matches"].rbegin(); it != data_["matches"].rend(); ++it)
+			if (jget(*it, "session") == json(session_id()) && jget(*it, "my_char").is_string()) {
+				before = (*it)["my_char"].get<std::string>(); break;
+			}
+	bool changed = !before.empty() && before != character;
+	if (changed) {
+		data_["matches"] = json::array();
+		data_["session"] = {{"id", session_id() + 1}, {"started", now_seconds()}, {"character", character}};
 		save();
+	} else if (jget(data_["session"], "character") != json(character)) {
+		data_["session"]["character"] = character;
+		save();
+	}
+	return changed;
 }
 
 json Store::pick(const json &fields)
@@ -148,8 +195,7 @@ void Store::save()
 		double ta = a.value("ts", 0.0), tb = b.value("ts", 0.0);
 		return ta != tb ? ta < tb : a.value("id", 0) < b.value("id", 0);
 	});
-	if (ms.size() > kHistoryLimit)
-		ms.erase(ms.begin(), ms.end() - ptrdiff_t(kHistoryLimit));
+	expire(now_seconds());
 	write_text_file_atomic(path_, data_.dump(1));
 }
 
@@ -243,7 +289,9 @@ void Store::resolve_pending(const std::string &pending_id, const std::string &ch
 int Store::new_session()
 {
 	std::lock_guard<std::recursive_mutex> lock(mutex_);
+	json character = jget(data_["session"], "character");
 	data_["session"] = {{"id", session_id() + 1}, {"started", now_seconds()}};
+	if (character.is_string()) data_["session"]["character"] = character;
 	save();
 	return session_id();
 }
@@ -330,6 +378,8 @@ json default_config()
   "server": {"port": 17860},
   "player": {"names": [], "chars": [], "side": "p1", "rating_label": "auto"},
   "display": {"char_lang": "ja"},
+  "history": {"retention_hours": 0, "reset_on_character_change": true},
+  "input_display": {},
   "rois": {"vs": null, "result": null, "rating": null, "p1_char": null, "p2_char": null, "p1_name": null, "p2_name": null},
   "signals": {
     "vs": {"roi": "vs", "keywords": ["VS"], "templates": []},
@@ -377,6 +427,13 @@ void Config::update(const json &patch)
 void Config::save()
 {
 	write_text_file_atomic(path_, data_.dump(2));
+}
+
+void Config::set_input_display(const json &settings)
+{
+	std::lock_guard<std::recursive_mutex> lock(mutex_);
+	data_["input_display"] = settings;
+	save();
 }
 
 } // namespace sf6

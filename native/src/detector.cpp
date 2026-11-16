@@ -290,6 +290,18 @@ void Detector::settle_previous(const std::optional<RatingKey> &r, const std::str
 		store_.update(jget(*last, "id").get<int>(), {{"rating", r->first}, {"delta", r->first - b}});
 }
 
+void Detector::track_character()
+{
+	if (!m_ || jget(jget(c_, "history"), "reset_on_character_change") == json(false) ||
+	    (m_->you < 2 && m_->named < 2)) return;
+	auto side = m_->side.top(2);
+	auto character = side ? m_->chars[idx(*side)].top(2) : std::nullopt;
+	if (character && store_.observe_character(*character)) {
+		recovery_.reset(); active_.reset(); last_record_ = 0;
+		recovery_session_ = store_.session_id();
+	}
+}
+
 void Detector::arm_recovery()
 {
 	if (active_ || !m_ || m_->hud_seen <= 0 || (m_->you < 2 && m_->named < 2))
@@ -555,6 +567,7 @@ std::optional<json> Detector::process(const Frame &look, const Image &full, doub
 					settle_previous(my_rating(probe.rating[1]), "", now);
 			}
 		}
+		track_character();
 		if (m_ && !m_->linked && complete(*m_)) {
 			m_->linked = true;
 			std::string my = *m_->side.top();

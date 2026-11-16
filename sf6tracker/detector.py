@@ -526,6 +526,17 @@ class Detector:
         if now - last["ts"] < 1800 and 0 < abs(r[0] - before) <= 1500:
             self.store.update(last["id"], rating=r[0], delta=r[0] - before)
 
+    def _sf6_track_character(self):
+        m = self.m
+        if not m or not self.cfg['history'].get('reset_on_character_change', True) or (m['you'] < 2 and m['named'] < 2):
+            return
+        side = _top(m['side'], 2)
+        character = _top(m['chars'][side], 2) if side else None
+        if character and self.store.observe_character(character):
+            self.recovery = self.active = None
+            self.last_record = None
+            self.recovery_session = self.store.session_id
+
     def _sf6_arm_recovery(self):
         m = self.m
         if self.active or not m or not m["hud_seen"] or (m["you"] < 2 and m["named"] < 2):
@@ -737,6 +748,7 @@ class Detector:
                     self._sf6_take(probe, ctx.region("hud_p2"), "p2")
                     if probe["named"] or not [n for n in self.cfg["player"].get("names", []) if n.strip()]:
                         self._sf6_settle_previous(_my_rating(probe["rating"]["p2"]), None, now)
+            self._sf6_track_character()
             if m and not m["linked"] and self._sf6_complete(m):
                 m["linked"] = True
                 my = m["side"].most_common(1)[0][0]

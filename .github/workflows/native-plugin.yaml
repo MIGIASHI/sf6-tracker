@@ -41,7 +41,8 @@ jobs:
           EXE=./http-build/input_check
           if [ "${{ runner.os }}" = Windows ]; then EXE=./http-build/Release/input_check.exe; fi
           "$EXE"
-      - name: Check 25-match retention in Python and native storage
+          if [ "${{ runner.os }}" = Windows ]; then "$EXE" --wheel-test; fi
+      - name: Check timed retention and character reset in Python and native storage
         shell: bash
         run: |
           python tests/test_store.py
@@ -72,6 +73,8 @@ jobs:
         run: python native/tests/compare_with_python.py
       - name: Missed-result recovery guards
         run: python tests/test_rating_recovery.py
+      - name: Python settings API
+        run: python tests/test_server_settings.py
       - name: Text rules
         run: python native/tests/compare_text_with_python.py
       - name: Text reading
@@ -82,6 +85,7 @@ jobs:
         run: |
           MODELS=$(python -c "import rapidocr_onnxruntime, os; print(os.path.join(os.path.dirname(rapidocr_onnxruntime.__file__), 'models'))")
           python native/tests/compare_detector_with_python.py ./replay ort/lib/libonnxruntime.so "$MODELS"
+          python native/tests/compare_detector_with_python.py ./replay ort/lib/libonnxruntime.so "$MODELS" --character-reset
 
   windows:
     name: Build for Windows (OBS 31+)
@@ -129,6 +133,12 @@ jobs:
             & $ocrCheck 'data/obs-plugins/sf6-tracker-native/ort/sf6-onnxruntime.dll' 'data/obs-plugins/sf6-tracker-native/models/ch_PP-OCRv4_det_infer.onnx' 'data/obs-plugins/sf6-tracker-native/models/ch_PP-OCRv4_rec_infer.onnx'
             if ($LASTEXITCODE -ne 0) { throw 'OCR startup test failed' }
           } finally { Pop-Location }
+      - name: Verify native settings API and retention
+        run: |
+          cmake --build --preset windows-x64 --config RelWithDebInfo --target tracker_api_check --parallel
+          if ($LASTEXITCODE -ne 0) { throw 'Tracker API test build failed' }
+          $trackerCheck = (Resolve-Path build_x64/tests/RelWithDebInfo/tracker_api_check.exe).Path
+          python ../tests/test_server_settings.py "$trackerCheck" "$PWD/package"
       - name: Verify plugin registration with OBS 32.2.2
         run: |
           Invoke-WebRequest 'https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-Windows-x64.zip' -OutFile obs-32.2.2.zip

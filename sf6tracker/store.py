@@ -4,29 +4,71 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import os
 import threading
 import time
 
 FIELDS = ("ts", "result", "my_char", "opp_char", "rating", "delta", "rating_label",
           "my_pending", "opp_pending", "auto", "carried", "note", "side", "side_by", "rating_before", "rushes")
-HISTORY_LIMIT = 25
 
 
 class Store:
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, retention_hours=0):
         self.path = os.path.join(data_dir, "history.json")
         self.lock = threading.RLock()
+        self.retention_hours = max(0.0, float(retention_hours))
         self.data = {"version": 1, "session": {"id": 1, "started": time.time()}, "next_id": 1, "matches": []}
         if os.path.exists(self.path):
             with open(self.path, encoding="utf-8") as f:
                 self.data.update(json.load(f))
-            if len(self.data["matches"]) > HISTORY_LIMIT:
+            self.prune()
+
+    def _expire(self, now):
+        if not self.retention_hours:
+            return False
+        old = self.data["matches"]
+        self.data["matches"] = [m for m in old if m["ts"] >= now - self.retention_hours * 3600]
+        return len(old) != len(self.data["matches"])
+
+    def prune(self, now=None):
+        with self.lock:
+            if self._expire(time.time() if now is None else now):
+                self._write()
+
+    def set_retention_hours(self, hours, now=None):
+        hours = float(hours)
+        if not math.isfinite(hours) or not 0 <= hours <= 87600:
+            raise ValueError('Invalid retention hours')
+        with self.lock:
+            self.retention_hours = hours
+            self.prune(now)
+
+    def observe_character(self, char):
+        if not char:
+            return False
+        with self.lock:
+            session = self.data['session']
+            before = session.get('character')
+            if not before:
+                before = next((m.get('my_char') for m in reversed(self.data['matches'])
+                               if m['session'] == session['id'] and m.get('my_char')), None)
+            changed = bool(before and before != char)
+            if changed:
+                self.data['matches'] = []
+                self.data['session'] = {'id': session['id'] + 1, 'started': time.time(), 'character': char}
                 self._save()
+            elif session.get('character') != char:
+                session['character'] = char
+                self._save()
+            return changed
 
     def _save(self):
         self.data["matches"].sort(key=lambda x: (x["ts"], x["id"]))
-        self.data["matches"] = self.data["matches"][-HISTORY_LIMIT:]
+        self._expire(time.time())
+        self._write()
+
+    def _write(self):
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=1)
@@ -89,7 +131,10 @@ class Store:
 
     def new_session(self):
         with self.lock:
+            character = self.data['session'].get('character')
             self.data["session"] = {"id": self.session_id + 1, "started": time.time()}
+            if character:
+                self.data['session']['character'] = character
             self._save()
             return self.session_id
 

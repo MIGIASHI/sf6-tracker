@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import threading
@@ -63,6 +64,14 @@ def make_handler(app):
                 return self.send([app.decorate(m) for m in app.store.matches()[::-1]])
             if p == "/api/config":
                 return self.send(dict(app.cfg.data, roster=app.roster()))
+            if p == '/api/input-settings':
+                return self.send(app.cfg['input_display'])
+            if p == '/api/keys':
+                from .key_input import read_keys
+                values = q.get('codes', '').split(',') if q.get('codes') else []
+                if len(values) > 32 or any(not re.fullmatch(r'[0-9]{1,3}', c) or not 0 < int(c) <= 259 or int(c) == 255 for c in values):
+                    return self.send({'error': 'invalid key codes'}, code=400)
+                return self.send(read_keys([int(c) for c in values]))
             if p == "/api/sources":
                 return self.send(app.sources())
             if p == "/api/frames":
@@ -108,9 +117,22 @@ def make_handler(app):
             except ValueError:
                 return self.send({"error": "bad json"}, code=400)
             if p == "/api/config":
+                if not isinstance(data, dict) or ('history' in data and not isinstance(data['history'], dict)):
+                    return self.send({'error': 'invalid settings'}, code=400)
+                hours = data.get('history', {}).get('retention_hours')
+                if hours is not None and (type(hours) not in (int, float) or not math.isfinite(hours) or not 0 <= hours <= 87600):
+                    return self.send({'error': 'invalid retention hours'}, code=400)
                 data.pop("roster", None)
                 app.cfg.update(data)
+                app.store.set_retention_hours(app.cfg['history']['retention_hours'])
                 return self.send({"ok": True})
+            if p == '/api/input-settings':
+                if not isinstance(data, dict) or len(raw) > 16384:
+                    return self.send({'error': 'invalid input settings'}, code=400)
+                with app.cfg.lock:
+                    app.cfg.data['input_display'] = data
+                    app.cfg.save()
+                return self.send({'ok': True})
             if p == "/api/matches":
                 data.setdefault("ts", time.time())
                 data["auto"] = False
