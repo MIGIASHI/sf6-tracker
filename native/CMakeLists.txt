@@ -38,6 +38,7 @@ target_sources(
   ${CMAKE_PROJECT_NAME}
   PRIVATE
     src/plugin-main.cpp
+    updater/obs-updater.cpp
     src/sf6-filter.cpp
     src/tracker.cpp
     src/tracker.hpp
@@ -75,7 +76,6 @@ if(WIN32)
   set(WASURENE_UPDATE_TITLE "SF6 Tracker")
   add_subdirectory(updater)
   configure_file(updater/configuration.hpp.in updater/configuration.hpp @ONLY)
-  target_sources(${CMAKE_PROJECT_NAME} PRIVATE updater/obs-updater.cpp)
   target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/updater")
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE wasurene_update_core comctl32)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE $<$<BOOL:${WASURENE_UPDATER_TESTING}>:WASURENE_UPDATER_TESTING>)
