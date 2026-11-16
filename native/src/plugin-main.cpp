@@ -18,6 +18,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <obs-module.h>
 #include <plugin-support.h>
+#include "../updater/obs-updater.hpp"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
@@ -28,6 +29,7 @@ extern "C" void sf6_shutdown(void);
 bool obs_module_load(void)
 {
 	sf6_register_filter();
+	wasurene_update::initialize();
 	obs_log(LOG_INFO, "loaded (version %s)", PLUGIN_VERSION);
 	return true;
 }
@@ -35,5 +37,6 @@ bool obs_module_load(void)
 void obs_module_unload(void)
 {
 	sf6_shutdown();
+	wasurene_update::shutdown();
 	obs_log(LOG_INFO, "unloaded");
 }

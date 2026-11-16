@@ -13,6 +13,18 @@ env:
   RAPIDOCR_VERSION: "1.4.4"
 
 jobs:
+  updater:
+    name: Updater sandbox transactions
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: cmake -S native/updater/tests -B build-updater
+      - run: cmake --build build-updater --config Release --parallel
+      - run: python native/updater/tests/test_updater.py build-updater/Release/updater-check.exe build-updater/updater/Release/wasurene-update.exe
   http-lifecycle:
     name: HTTP shutdown (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -114,7 +126,7 @@ jobs:
           Expand-Archive rapidocr.zip -DestinationPath rapidocr
           Get-ChildItem rapidocr/rapidocr_onnxruntime/models
       - name: Configure
-        run: cmake --preset windows-x64 "-DSF6_ORT_DIR=$PWD/ort" "-DSF6_MODELS_DIR=$PWD/rapidocr/rapidocr_onnxruntime/models"
+        run: cmake --preset windows-x64 "-DSF6_ORT_DIR=$PWD/ort" "-DSF6_MODELS_DIR=$PWD/rapidocr/rapidocr_onnxruntime/models" -DENABLE_FRONTEND_API=ON -DWASURENE_UPDATER_TESTING=${{ github.ref != 'refs/heads/main' && 'ON' || 'OFF' }}
       - name: Build
         run: cmake --build --preset windows-x64 --config RelWithDebInfo --parallel
       - name: Install into a folder layout OBS understands
