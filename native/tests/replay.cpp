@@ -1,4 +1,4 @@
-// replay <onnxruntime lib> <models dir> <data dir> <frames file> [--ggst]
+// replay <onnxruntime lib> <models dir> <data dir> <frames file> [--ggst [--live-interval]]
 // Frames file: repeated [double time][int32 w][int32 h][w*h*3 BGR]. Runs the native Detector on
 // them with the settings in <data dir>/config.json and leaves the history in <data dir>/history.json.
 #include "../src/detector.hpp"
@@ -21,6 +21,8 @@ int main(int argc, char **argv)
 	sf6::Detector det(cfg, store, ocr);
 	sf6::StriveDetector strive(cfg, store, ocr);
 	const bool ggst = argc > 5 && std::string(argv[5]) == "--ggst";
+	const bool live_interval = argc > 6 && std::string(argv[6]) == "--live-interval";
+	double next = 0;
 	std::ifstream f(argv[4], std::ios::binary);
 	for (;;) {
 		double t;
@@ -31,7 +33,10 @@ int main(int argc, char **argv)
 		if (!f.read(reinterpret_cast<char *>(img.px.data()), std::streamsize(img.px.size())))
 			return 2;
 		if (ggst) {
+			if (live_interval && t + 0.001 < next)
+				continue;
 			strive.process(img, t);
+			next = t + (strive.hurry() > 0 ? strive.hurry() : 1.5);
 			std::printf("%.1f %s\n", t, strive.debug().dump().c_str());
 			continue;
 		}

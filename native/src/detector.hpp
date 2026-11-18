@@ -55,7 +55,7 @@ public:
 	void process(const Image &full, double now);
 	json inspect(const Image &full);
 	json debug() const { return debug_; }
-	double hurry() const { return confirmations_ == 1 ? 0.4 : 0; }
+	double hurry() const { return (result_visible_ && !recorded_) || reading_intro_ ? 0.35 : 0; }
 
 private:
 	void read_players(const Image &full, double now);
@@ -68,7 +68,9 @@ private:
 	json debug_ = json::object();
 	int confirmations_ = 0, absent_ = 0;
 	double last_seen_ = 0;
-	bool recorded_ = false;
+	bool result_visible_ = false, recorded_ = false;
+	bool reading_intro_ = false;
+	std::optional<int> delta_;
 };
 
 // One picture plus what was read from it, so each place is read at most once.

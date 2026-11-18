@@ -781,12 +781,16 @@ json StriveDetector::inspect(const Image &full)
 
 void StriveDetector::process(const Image &full, double now)
 {
+	reading_intro_ = false;
+	read_players(full, now);
 	if (!strive_header(full)) {
-		debug_ = {{"scene", "unknown"}};
-		read_players(full, now);
+		result_visible_ = false;
+		if (players_seen_ != now)
+			debug_ = {{"scene", "unknown"}};
 		if (++absent_ >= 2) {
 			recorded_ = false;
 			absent_ = 2;
+			delta_.reset();
 		}
 		confirmations_ = 0;
 		return;
@@ -795,9 +799,26 @@ void StriveDetector::process(const Image &full, double now)
 	if (recorded_)
 		return;
 	debug_ = inspect(full);
+	result_visible_ = debug_["scene"] == "result";
 	if (debug_["rating"].is_null()) {
 		confirmations_ = 0;
 		return;
+	}
+	if (debug_["rating_label"] == "RP") {
+		// The signed amount above the gauge disappears when the animation finishes.
+		const Roi change{0.075, 0.385, 0.26, 0.042};
+		static const std::regex signed_amount(R"(([+-]) *([0-9]{1,4}))");
+		for (const auto &item : ocr_.read(full, &change, 0, 4)) {
+			std::smatch amount;
+			if (item.conf >= 0.68 && std::regex_match(item.text, amount, signed_amount)) {
+				const int sign = amount[1].str() == "+" ? 1 : -1;
+				if ((sign > 0) == (debug_["result"] == "win")) {
+					delta_ = sign * std::stoi(amount[2].str());
+					confirmations_ = 0;
+					return;
+				}
+			}
+		}
 	}
 	if (candidate_ != debug_ || now - last_seen_ > 3) {
 		candidate_ = debug_;
@@ -814,6 +835,8 @@ void StriveDetector::process(const Image &full, double now)
 		players_ = nullptr;
 		match["ts"] = now;
 		match["auto"] = true;
+		if (delta_ && match["rating_label"] == "RP")
+			match["delta"] = *delta_;
 		store_.add(match);
 		recorded_ = true;
 	}
@@ -821,15 +844,31 @@ void StriveDetector::process(const Image &full, double now)
 
 void StriveDetector::read_players(const Image &full, double now)
 {
-	if (full.empty() || now < next_players_)
+	if (full.empty())
 		return;
-	next_players_ = now + 0.8;
 	const auto dark = [&full](int y) {
 		const auto *p = full.at(full.w * 65 / 100, full.h * y / 100);
 		return std::max({p[0], p[1], p[2]}) < 50;
 	};
 	if (!dark(8) || !dark(87))
 		return;
+	// The intro's two black player cards are separated from the scene by thin dividers.
+	const auto divider = [&full](int y0, int y1) {
+		for (int y = full.h * y0 / 1000; y <= full.h * y1 / 1000; ++y) {
+			int gray = 0;
+			for (int x = 33; x <= 65; x += 4) {
+				const auto *p = full.at(full.w * x / 100, y);
+				gray += std::min({p[0], p[1], p[2]}) >= 45;
+			}
+			if (gray >= 7)
+				return true;
+		}
+		return false;
+	};
+	reading_intro_ = !players_.is_object() && divider(115, 125) && divider(900, 915);
+	if (now < next_players_)
+		return;
+	next_players_ = now + (reading_intro_ ? 0.3 : 0.8);
 
 	const Roi cards[] = {{0.12, 0.34, 0.29, 0.14}, {0.12, 0.52, 0.29, 0.14}};
 	const Roi names[] = {{0.505, 0.065, 0.18, 0.038}, {0.505, 0.847, 0.18, 0.038}};
@@ -843,7 +882,9 @@ void StriveDetector::read_players(const Image &full, double now)
 				player_names.push_back(name.get<std::string>());
 	for (int i = 0; i < 2; ++i) {
 		std::string header;
-		for (const auto &item : ocr_.read(full, &cards[i], 0, 8, 1.0)) {
+		auto items = ocr_.read(full, &cards[i], 0, 8, 1.0);
+		std::sort(items.begin(), items.end(), [](const TextItem &a, const TextItem &b) { return a.cx < b.cx; });
+		for (const auto &item : items) {
 			if (item.conf >= 0.65 && item.cy < cards[i].y + 0.052) {
 				header += " " + item.text;
 				you[i] |= tokens(item.text) == std::vector<std::string>{"YOU"};
@@ -857,7 +898,14 @@ void StriveDetector::read_players(const Image &full, double now)
 		std::string tag;
 		for (const auto &token : tokens(header))
 			tag += token;
-		if (tag.find(i == 0 ? "PLAYER1" : "PLAYER2") == std::string::npos || chars[i].empty())
+		const std::string seat = i == 0 ? "PLAYER1" : "PLAYER2";
+		you[i] |= tag == seat + "YOU";
+		if (!you[i]) {
+			const Roi marker{0.207, cards[i].y + 0.008, 0.053, 0.044};
+			const auto [text, score] = ocr_.recognize(crop(full, marker));
+			you[i] = score >= 0.65 && tokens(text) == std::vector<std::string>{"YOU"};
+		}
+		if (tag.find(seat) != 0 || chars[i].empty())
 			return;
 		if (!player_names.empty()) {
 			for (const auto &item : ocr_.read(full, &names[i], 0, 4))
