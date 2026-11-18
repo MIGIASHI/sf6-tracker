@@ -59,6 +59,15 @@ public:
 
 private:
 	void read_players(const Image &full, double now);
+	void read_hud(const Image &full, double now);
+	void record(json match, double now);
+	struct HudRating {
+		int value;
+		json players;
+		double seen;
+		int session;
+		json last_id;
+	};
 	Config &cfg_;
 	Store &store_;
 	Ocr &ocr_;
@@ -71,6 +80,13 @@ private:
 	bool result_visible_ = false, recorded_ = false;
 	bool reading_intro_ = false;
 	std::optional<int> delta_;
+	std::optional<HudRating> hud_;
+	std::optional<int> hud_candidate_;
+	int hud_reads_ = 0;
+	double hud_read_at_ = 0, hud_candidate_at_ = 0;
+	bool hud_boundary_ = false;
+	bool verified_players_ = false;
+	double result_since_ = 0;
 };
 
 // One picture plus what was read from it, so each place is read at most once.

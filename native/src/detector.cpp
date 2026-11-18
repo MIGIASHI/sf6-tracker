@@ -785,6 +785,7 @@ void StriveDetector::process(const Image &full, double now)
 	read_players(full, now);
 	if (!strive_header(full)) {
 		result_visible_ = false;
+		result_since_ = 0;
 		if (players_seen_ != now)
 			debug_ = {{"scene", "unknown"}};
 		if (++absent_ >= 2) {
@@ -793,6 +794,7 @@ void StriveDetector::process(const Image &full, double now)
 			delta_.reset();
 		}
 		confirmations_ = 0;
+		read_hud(full, now);
 		return;
 	}
 	absent_ = 0;
@@ -800,7 +802,23 @@ void StriveDetector::process(const Image &full, double now)
 		return;
 	debug_ = inspect(full);
 	result_visible_ = debug_["scene"] == "result";
+	if (result_visible_) {
+		hud_boundary_ = true;
+		if (result_since_ == 0)
+			result_since_ = now;
+	}
 	if (debug_["rating"].is_null()) {
+		confirmations_ = 0;
+		return;
+	}
+	if (hud_ && delta_ && debug_["rating_label"] == "RP" &&
+	    debug_["rating"] != hud_->value + *delta_) {
+		confirmations_ = 0;
+		return;
+	}
+	// Early RP readings can still be the old value before the animation starts.
+	if (hud_ && debug_["rating_label"] == "RP" && debug_["rating"] == hud_->value &&
+	    now - result_since_ < 3) {
 		confirmations_ = 0;
 		return;
 	}
@@ -827,19 +845,85 @@ void StriveDetector::process(const Image &full, double now)
 	last_seen_ = now;
 	if (++confirmations_ >= 2) {
 		auto match = candidate_;
-		if (players_.is_object() && now - players_seen_ < 1200) {
+		if (verified_players_ && players_.is_object() && now - players_seen_ < 1200)
 			match.update(players_);
-			if (jget(cfg_.section("history"), "reset_on_character_change") != false)
-				store_.observe_character(match["my_char"].get<std::string>());
-		}
-		players_ = nullptr;
-		match["ts"] = now;
-		match["auto"] = true;
 		if (delta_ && match["rating_label"] == "RP")
 			match["delta"] = *delta_;
-		store_.add(match);
+		record(std::move(match), now);
+		hud_.reset();
+		hud_candidate_.reset();
+		hud_boundary_ = false;
+		verified_players_ = false;
 		recorded_ = true;
 	}
+}
+
+void StriveDetector::record(json match, double now)
+{
+	const auto character = jget(match, "my_char");
+	if (character.is_string() && jget(cfg_.section("history"), "reset_on_character_change") != false)
+		store_.observe_character(character.get<std::string>());
+	match["ts"] = now;
+	match["auto"] = true;
+	store_.add(match);
+}
+
+void StriveDetector::read_hud(const Image &full, double now)
+{
+	if (!players_.is_object() || now - players_seen_ >= 1200 || now < hud_read_at_)
+		return;
+	hud_read_at_ = now + 1.3;
+	const bool left = players_["side"] == "p1";
+	const Roi boxes[] = {{0.075, 0.060, 0.23, 0.080}, {0.69, 0.060, 0.245, 0.080}};
+	const auto matches_character = [](const Items &items, const json &character) {
+		return std::any_of(items.begin(), items.end(), [&](const TextItem &item) {
+			return item.conf >= 0.70 && strive_character(item.text) == character;
+		});
+	};
+	const auto mine = ocr_.read(full, &boxes[left ? 0 : 1], 0, 8, 2.0);
+	const auto rating = strive_rating(mine, "RP");
+	if (!rating || !matches_character(mine, players_["my_char"]))
+		return;
+	// A rematch can omit the intro. Require the HUD to agree with its last known matchup.
+	const auto opponent = ocr_.read(full, &boxes[left ? 1 : 0], 0, 8, 2.0);
+	if (!matches_character(opponent, players_["opp_char"]) || !strive_rating(opponent, "RP"))
+		return;
+
+	const int session = store_.session_id();
+	const auto last = store_.last();
+	const json last_id = last ? jget(*last, "id") : json(nullptr);
+	if (hud_ && (hud_->session != session || now - hud_->seen > 120 ||
+		     hud_->last_id != last_id ||
+		     hud_->players["my_char"] != players_["my_char"])) {
+		hud_.reset();
+		hud_candidate_.reset();
+	}
+	if (hud_ && now - hud_->seen >= 4)
+		hud_boundary_ = true;
+	if (hud_candidate_ != rating->first || now - hud_candidate_at_ > 5) {
+		hud_candidate_ = rating->first;
+		hud_reads_ = 0;
+	}
+	hud_candidate_at_ = now;
+	if (++hud_reads_ < 2)
+		return;
+	if (hud_ && rating->first != hud_->value) {
+		const int change = rating->first - hud_->value;
+		if (!hud_boundary_)
+			return;
+		if (std::abs(change) <= 3000) {
+			auto match = hud_->players;
+			match.update({{"rating", rating->first}, {"rating_label", "RP"},
+				      {"result", change > 0 ? "win" : "lose"}, {"delta", change}});
+			record(std::move(match), now);
+			debug_ = {{"scene", "hud_recovery"}, {"rating", rating->first}, {"delta", change}};
+		}
+	}
+	const auto saved = store_.last();
+	hud_ = HudRating{rating->first, players_, now, store_.session_id(), saved ? jget(*saved, "id") : json(nullptr)};
+	hud_boundary_ = false;
+	hud_reads_ = 2;
+	verified_players_ = true;
 }
 
 void StriveDetector::read_players(const Image &full, double now)
@@ -921,7 +1005,10 @@ void StriveDetector::read_players(const Image &full, double now)
 	if (!from_name && !from_marker)
 		return;
 	const int me = (from_name ? registered[0] : you[0]) ? 0 : 1;
-	players_ = {{"my_char", chars[me]}, {"opp_char", chars[1 - me]}};
+	if (hud_)
+		hud_boundary_ = true;
+	players_ = {{"my_char", chars[me]}, {"opp_char", chars[1 - me]}, {"side", me == 0 ? "p1" : "p2"}};
+	verified_players_ = true;
 	players_seen_ = now;
 	debug_ = {{"scene", "matchup"}, {"side", me == 0 ? "p1" : "p2"}, {"by", from_name ? "name" : "you"},
 		  {"my_char", chars[me]}, {"opp_char", chars[1 - me]}};
