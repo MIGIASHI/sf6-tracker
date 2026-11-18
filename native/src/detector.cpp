@@ -700,6 +700,9 @@ std::optional<RatingKey> strive_rating(Items items, const std::string &label)
 	const auto compact = [](std::string text) {
 		text.erase(std::remove_if(text.begin(), text.end(),
 					  [](char c) { return c == ' ' || c == ','; }), text.end());
+		for (char &c : text)
+			if (c >= 'a' && c <= 'z')
+				c = char(c - 'a' + 'A');
 		return text;
 	};
 	std::set<int> values;
