@@ -806,18 +806,23 @@ void StriveDetector::process(const Image &full, double now)
 		hud_boundary_ = true;
 		if (result_since_ == 0)
 			result_since_ = now;
+	} else {
+		confirmations_ = 0;
+		read_hud(full, now);
+		return;
 	}
 	if (debug_["rating"].is_null()) {
 		confirmations_ = 0;
 		return;
 	}
-	if (hud_ && delta_ && debug_["rating_label"] == "RP" &&
+	const bool same_battle = hud_ && hud_->players == players_ && now - hud_->seen < 15;
+	if (same_battle && delta_ && debug_["rating_label"] == "RP" &&
 	    debug_["rating"] != hud_->value + *delta_) {
 		confirmations_ = 0;
 		return;
 	}
 	// Early RP readings can still be the old value before the animation starts.
-	if (hud_ && debug_["rating_label"] == "RP" && debug_["rating"] == hud_->value &&
+	if (same_battle && debug_["rating_label"] == "RP" && debug_["rating"] == hud_->value &&
 	    now - result_since_ < 3) {
 		confirmations_ = 0;
 		return;
@@ -911,7 +916,8 @@ void StriveDetector::read_hud(const Image &full, double now)
 		const int change = rating->first - hud_->value;
 		if (!hud_boundary_)
 			return;
-		if (std::abs(change) <= 3000) {
+		const bool verified_side = players_["my_char"] != players_["opp_char"] || players_seen_ > hud_->seen;
+		if (verified_side && std::abs(change) <= 3000) {
 			auto match = hud_->players;
 			match.update({{"rating", rating->first}, {"rating_label", "RP"},
 				      {"result", change > 0 ? "win" : "lose"}, {"delta", change}});
