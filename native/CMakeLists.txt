@@ -4,7 +4,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCO
 
 project(${_name} VERSION ${_version})
 
-option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" OFF)
+option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
 option(ENABLE_QT "Use Qt functionality" OFF)
 
 include(compilerconfig)
@@ -38,6 +38,7 @@ target_sources(
   ${CMAKE_PROJECT_NAME}
   PRIVATE
     src/plugin-main.cpp
+    updater/obs-updater.cpp
     src/sf6-filter.cpp
     src/tracker.cpp
     src/tracker.hpp
@@ -69,6 +70,16 @@ if(NOT EXISTS "${SF6_ORT_DIR}/include/onnxruntime_cxx_api.h")
 endif()
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE third_party "${SF6_ORT_DIR}/include")
 if(WIN32)
+  set(WASURENE_UPDATE_PLUGIN "sf6-tracker-native")
+  set(WASURENE_UPDATE_REPO "MIGIASHI/sf6-tracker")
+  set(WASURENE_UPDATE_ASSET "sf6-tracker-native-windows.zip")
+  set(WASURENE_UPDATE_TITLE "SF6 Tracker")
+  add_subdirectory(updater)
+  configure_file(updater/configuration.hpp.in updater/configuration.hpp @ONLY)
+  target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/updater")
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE wasurene_update_core)
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE $<$<BOOL:${WASURENE_UPDATER_TESTING}>:WASURENE_UPDATER_TESTING>)
+  target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
   add_executable(tracker_api_check EXCLUDE_FROM_ALL tests/tracker_api_check.cpp src/tracker.cpp src/http.cpp
     src/input.cpp src/detector.cpp src/store.cpp src/text.cpp src/ocr.cpp src/image.cpp src/scene.cpp)
   target_compile_features(tracker_api_check PRIVATE cxx_std_17)

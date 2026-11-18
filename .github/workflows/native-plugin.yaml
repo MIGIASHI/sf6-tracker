@@ -13,6 +13,18 @@ env:
   RAPIDOCR_VERSION: "1.4.4"
 
 jobs:
+  updater:
+    name: Updater sandbox transactions
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: cmake -S native/updater/tests -B build-updater
+      - run: cmake --build build-updater --config Release --parallel
+      - run: python native/updater/tests/test_updater.py build-updater/Release/updater-check.exe build-updater/updater/Release/wasurene-update.exe
   http-lifecycle:
     name: HTTP shutdown (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -114,7 +126,7 @@ jobs:
           Expand-Archive rapidocr.zip -DestinationPath rapidocr
           Get-ChildItem rapidocr/rapidocr_onnxruntime/models
       - name: Configure
-        run: cmake --preset windows-x64 "-DSF6_ORT_DIR=$PWD/ort" "-DSF6_MODELS_DIR=$PWD/rapidocr/rapidocr_onnxruntime/models"
+        run: cmake --preset windows-x64 "-DSF6_ORT_DIR=$PWD/ort" "-DSF6_MODELS_DIR=$PWD/rapidocr/rapidocr_onnxruntime/models" -DENABLE_FRONTEND_API=ON -DWASURENE_UPDATER_TESTING=${{ github.ref == 'refs/heads/feat/plugin-updater' && 'ON' || 'OFF' }}
       - name: Build
         run: cmake --build --preset windows-x64 --config RelWithDebInfo --parallel
       - name: Install into a folder layout OBS understands
@@ -144,6 +156,10 @@ jobs:
           Invoke-WebRequest 'https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-Windows-x64.zip' -OutFile obs-32.2.2.zip
           if ((Get-FileHash obs-32.2.2.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1') { throw 'OBS archive hash mismatch' }
           Expand-Archive obs-32.2.2.zip -DestinationPath obs-32.2.2
+          cmake --build --preset windows-x64 --config RelWithDebInfo --target wasurene-import-check
+          if ($LASTEXITCODE -ne 0) { throw 'Import check build failed' }
+          & build_x64/updater/RelWithDebInfo/wasurene-import-check.exe "$PWD/obs-32.2.2/bin/64bit" "$PWD/package/obs-plugins/64bit/sf6-tracker-native.dll"
+          if ($LASTEXITCODE -ne 0) { throw 'Plain Win32 plugin imports failed' }
           python tests/check_obs_module.py obs-32.2.2 package
       - uses: actions/upload-artifact@v4
         with:
