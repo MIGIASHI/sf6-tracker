@@ -64,6 +64,7 @@
 <section id="history" class="on">
   <div class="card">
     <div class="rowf">
+      <select id="game" aria-label="記録するゲーム" hidden onchange="changeGame()"><option value="sf6">ストリートファイター6</option><option value="ggst">ギルティギア ストライヴ</option></select>
       <span class="sum" id="sum">-</span>
       <button class="win" onclick="addMatch('win')">＋勝ち</button>
       <button class="lose" onclick="addMatch('lose')">＋負け</button>
@@ -120,15 +121,16 @@
   <div class="card"><h2>プレイヤー</h2>
     <div class="grid">
       <span>プレイヤーネーム</span><input id="names" placeholder="ゲーム内の名前（複数は , で区切る）">
-      <span>自分の使用キャラ</span><select id="mychars" multiple size="5"></select>
-      <span>判定できないときの側</span><select id="side"><option value="p1">1P（左）</option><option value="p2">2P（右）</option></select>
-      <span>レートの種類</span><select id="rlabel"><option value="auto">自動（MRがあればMR）</option><option value="MR">MR</option><option value="LP">LP</option></select>
+      <span data-sf6-only>自分の使用キャラ</span><select data-sf6-only id="mychars" multiple size="5"></select>
+      <span data-sf6-only>判定できないときの側</span><select data-sf6-only id="side"><option value="p1">1P（左）</option><option value="p2">2P（右）</option></select>
+      <span data-sf6-only>レートの種類</span><select data-sf6-only id="rlabel"><option value="auto">自動（MRがあればMR）</option><option value="MR">MR</option><option value="LP">LP</option></select>
       <span>キャラ名の表示</span><select id="lang"><option value="ja">日本語</option><option value="en">English</option></select>
       <span>画面を見る間隔（秒）</span><input id="interval" type="number" step="0.1" min="0.3">
       <span>キャラ変更時</span><label><input id="charReset" type="checkbox">戦績・レート・履歴を自動リセット</label>
       <span>履歴の保持時間（時間）</span><input id="retention" type="number" min="0" max="87600" step="0.5">
     </div>
-    <p class="hint">1P / 2P は試合ごとに自動で判定します。まず画面に出ているプレイヤーネームを探し、読めなかったときは使用キャラ（Ctrl+クリックで複数選択）で判断し、それでも決まらないときだけ「判定できないときの側」を使います。</p>
+    <p class="hint" data-sf6-only>1P / 2P は試合ごとに自動で判定します。まず画面に出ているプレイヤーネームを探し、読めなかったときは使用キャラ（Ctrl+クリックで複数選択）で判断し、それでも決まらないときだけ「判定できないときの側」を使います。</p>
+    <p class="hint" id="ggstHint" hidden>ゲーム内のプレイヤーネームを登録してください。試合前に登録名や「You」の表示を読み、使用キャラと相手キャラを判定します。</p>
     <p class="hint">保持時間は0で無期限、0.5で30分です。件数上限はありません。期限切れの履歴と、キャラ変更時のリセット対象は自動削除されます。バックアップは作成しません。</p>
     <div style="margin-top:10px"><button onclick="saveSettings()">保存</button> <span id="saved" class="ok"></span></div>
   </div>
@@ -205,7 +207,13 @@ async function loadMatches() {
 const num = v => v === '' ? null : Number(v);
 async function upd(id, patch) { await api('/api/matches/' + id, patch); matchesJson = ''; document.activeElement.blur(); loadMatches(); }
 async function del(id) { await api('/api/matches/' + id + '/delete', {}); matchesJson = ''; loadMatches(); }
-async function addMatch(result) { await api('/api/matches', { result, opp_char: $('addOpp').value || null, rating_label: ['MR', 'LP'].includes(cfg.player.rating_label) ? cfg.player.rating_label : null }); matchesJson = ''; loadMatches(); }
+async function addMatch(result) {
+  const fields = { result, opp_char: $('addOpp').value || null };
+  if (cfg.game !== 'ggst') {
+    fields.rating_label = ['MR', 'LP'].includes(cfg.player.rating_label) ? cfg.player.rating_label : null;
+  }
+  await api('/api/matches', fields); matchesJson = ''; loadMatches();
+}
 async function newSession() { await api('/api/session/new', {}); matchesJson = ''; loadMatches(); }
 
 // ---------- calibration ----------
@@ -280,6 +288,12 @@ async function runTest() {
   $('test').innerHTML = '<p class="hint">読み取り中…</p>';
   const t = await api('/api/test', { seq: curSeq });
   if (t.error) { $('test').innerHTML = `<p class="hint">${esc(t.error)}</p>`; return; }
+  if (t.game === 'ggst') {
+    boxes = []; draw();
+    const result = t.result === 'win' ? '勝ち' : t.result === 'lose' ? '負け' : '読めず';
+    $('test').textContent = '勝敗 ' + result + ' ／ ' + (t.rating == null ? 'レートを読めず' : t.rating_label + ' ' + t.rating);
+    return;
+  }
   boxes = t.all_texts; draw();
   const sig = k => { const s = t.signals[k]; return `<span class="${s.found ? 'ok' : 'ng'}">${s.found ? '見つかった' : 'なし'}</span>` + (s.score != null ? ` (一致度 ${s.score})` : '') + (s.texts && s.texts.length ? ' ' + esc(s.texts.join(' / ')) : ''); };
   $('test').innerHTML = `<p>VS画面：${sig('vs')}<br>勝ち：${sig('win')}<br>負け：${sig('lose')}<br>
@@ -289,7 +303,18 @@ async function runTest() {
 }
 
 // ---------- settings ----------
-async function loadConfig() { cfg = await api('/api/config'); roster = cfg.roster; }
+async function loadConfig() {
+  cfg = await api('/api/config'); roster = cfg.roster;
+  $('game').hidden = !cfg.supported_games?.includes('ggst');
+  $('game').value = cfg.game === 'ggst' ? 'ggst' : 'sf6';
+  document.querySelectorAll('[data-sf6-only]').forEach(el => el.hidden = cfg.game === 'ggst');
+  $('ggstHint').hidden = cfg.game !== 'ggst';
+  $('addOpp').innerHTML = '<option value="">相手キャラ（任意）</option>' + charOptions('');
+}
+async function changeGame() {
+  try { await api('/api/config', { game: $('game').value }); }
+  finally { await loadConfig(); fillSettings(); matchesJson = ''; await loadMatches(); }
+}
 async function loadSources() {
   const list = await api('/api/sources');
   const cur = cfg.obs.source;
@@ -299,7 +324,7 @@ async function loadSources() {
 }
 function fillSettings() {
   $('host').value = cfg.obs.host; $('port').value = cfg.obs.port; $('pw').value = cfg.obs.password;
-  $('names').value = (cfg.player.names || []).join(', ');
+  $('names').value = ((cfg.game === 'ggst' ? cfg.ggst_player?.names : cfg.player.names) || []).join(', ');
   $('mychars').innerHTML = roster.map(c => `<option value="${c.id}" ${(cfg.player.chars || []).includes(c.id) ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
   $('side').value = cfg.player.side; $('rlabel').value = ['MR', 'LP'].includes(cfg.player.rating_label) ? cfg.player.rating_label : 'auto'; $('lang').value = cfg.display.char_lang;
   $('interval').value = cfg.capture.interval;
@@ -308,8 +333,12 @@ function fillSettings() {
   $('ovUrl').textContent = location.origin + '/overlay'; $('ctUrl').textContent = location.origin + '/control';
 }
 async function saveSettings() {
+  const names = $('names').value.split(/[,、，]/).map(s => s.trim()).filter(Boolean);
+  const player = cfg.game === 'ggst'
+    ? { ggst_player: { names } }
+    : { player: { names, chars: [...$('mychars').selectedOptions].map(o => o.value), side: $('side').value, rating_label: $('rlabel').value } };
   await api('/api/config', { obs: { host: $('host').value.trim(), port: +$('port').value, password: $('pw').value, source: $('source').value },
-    player: { names: $('names').value.split(/[,、，]/).map(s => s.trim()).filter(Boolean), chars: [...$('mychars').selectedOptions].map(o => o.value), side: $('side').value, rating_label: $('rlabel').value }, display: { char_lang: $('lang').value },
+    ...player, display: { char_lang: $('lang').value },
     capture: { interval: Math.max(0.3, +$('interval').value || 1) },
     history: { reset_on_character_change: $('charReset').checked, retention_hours: Math.max(0, Math.min(87600, +$('retention').value || 0)) } });
   await loadConfig(); fillSettings(); $('addOpp').innerHTML = '<option value="">相手キャラ（任意）</option>' + charOptions('');

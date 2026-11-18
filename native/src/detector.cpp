@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <regex>
 #include <set>
 
 #include "text.hpp"
@@ -677,6 +678,346 @@ json Detector::inspect(const Frame &look, const Image &full)
 	res_side_ = keep_side;
 	res_label_ = keep_label;
 	return out;
+}
+
+namespace {
+
+bool strive_header(const Image &full)
+{
+	if (full.empty() || full.w < 640 || std::abs(double(full.w) / full.h - 16.0 / 9) > 0.15)
+		return false;
+	int red = 0;
+	for (int col = 1; col <= 9; ++col) {
+		const auto *pixel = full.at(full.w * col / 10, full.h * 6 / 100);
+		red += pixel[2] >= 65 && pixel[2] > pixel[1] * 2 && pixel[2] > pixel[0] * 2;
+	}
+	if (red >= 8)
+		return true;
+	// The BATTLE CHART underline is shared by the original and updated result layouts.
+	for (int y = full.h * 225 / 1000; y <= full.h * 265 / 1000; ++y) {
+		int white = 0;
+		for (int col = 71; col <= 91; col += 2) {
+			const auto *pixel = full.at(full.w * col / 100, y);
+			white += pixel[0] >= 195 && pixel[1] >= 195 && pixel[2] >= 195;
+		}
+		if (white >= 10)
+			return true;
+	}
+	return false;
+}
+
+std::optional<RatingKey> strive_rating(Items items, const std::string &label)
+{
+	static const std::regex digits("[0-9]{1,6}");
+	const auto compact = [](std::string text) {
+		text.erase(std::remove_if(text.begin(), text.end(),
+					  [](char c) { return c == ' ' || c == ','; }), text.end());
+		for (char &c : text)
+			if (c >= 'a' && c <= 'z')
+				c = char(c - 'a' + 'A');
+		return text;
+	};
+	std::set<int> values;
+	for (const auto &item : items) {
+		if (item.conf < 0.75)
+			continue;
+		auto text = compact(item.text);
+		if (text.size() > label.size() && text.substr(text.size() - label.size()) == label) {
+			auto number = text.substr(0, text.size() - label.size());
+			if (std::regex_match(number, digits))
+				values.insert(std::stoi(number));
+		} else if (text == label) {
+			for (const auto &number : items) {
+				auto value = compact(number.text);
+				if (number.conf >= 0.75 && number.cx < item.cx &&
+				    std::abs(number.cy - item.cy) <= 0.012 &&
+				    std::abs(number.x + number.w - item.x) <= 0.018 &&
+				    std::regex_match(value, digits))
+					values.insert(std::stoi(value));
+			}
+		}
+	}
+	if (values.size() == 1)
+		return RatingKey{*values.begin(), label};
+	return std::nullopt;
+}
+
+} // namespace
+
+json StriveDetector::inspect(const Image &full)
+{
+	json reading = {{"scene", "unknown"}, {"result", nullptr}, {"rating", nullptr}, {"rating_label", nullptr}};
+	if (!strive_header(full))
+		return reading;
+
+	const Roi banner{0.08, 0.22, 0.20, 0.18};
+	std::set<std::string> results;
+	for (const auto &item : ocr_.read(full, &banner, 0, 3, 1.0)) {
+		if (item.conf >= 0.75 && (item.text == "WIN" || item.text == "LOSE"))
+			results.insert(item.text == "WIN" ? "win" : "lose");
+	}
+	if (results.size() != 1)
+		return reading;
+
+	reading["scene"] = "result";
+	reading["result"] = *results.begin();
+	// The RP number moves horizontally under the gauge. DR uses a separate, fixed badge.
+	const Roi rp{0.025, 0.51, 0.415, 0.11}, dr{0.175, 0.435, 0.121, 0.068};
+	auto rating = strive_rating(ocr_.read(full, &rp, 0, 10, 1.0), "RP");
+	if (!rating) {
+		// Text detection can split the stylized DR digits into overlapping boxes.
+		const auto [text, confidence] = ocr_.recognize(crop(full, dr));
+		static const std::regex duel(R"(([0-9]{1,6}) *D[RB])");
+		std::smatch match;
+		if (confidence >= 0.80 && std::regex_match(text, match, duel))
+			rating = RatingKey{std::stoi(match[1].str()), "DR"};
+	}
+	if (rating) {
+		reading["rating"] = rating->first;
+		reading["rating_label"] = rating->second;
+	}
+	return reading;
+}
+
+void StriveDetector::process(const Image &full, double now)
+{
+	reading_intro_ = false;
+	read_players(full, now);
+	if (!strive_header(full)) {
+		result_visible_ = false;
+		result_since_ = 0;
+		if (players_seen_ != now)
+			debug_ = {{"scene", "unknown"}};
+		if (++absent_ >= 2) {
+			recorded_ = false;
+			absent_ = 2;
+			delta_.reset();
+		}
+		confirmations_ = 0;
+		read_hud(full, now);
+		return;
+	}
+	absent_ = 0;
+	if (recorded_)
+		return;
+	debug_ = inspect(full);
+	result_visible_ = debug_["scene"] == "result";
+	if (result_visible_) {
+		hud_boundary_ = true;
+		if (result_since_ == 0)
+			result_since_ = now;
+	} else {
+		confirmations_ = 0;
+		read_hud(full, now);
+		return;
+	}
+	if (debug_["rating"].is_null()) {
+		confirmations_ = 0;
+		return;
+	}
+	const bool same_battle = hud_ && hud_->players == players_ && now - hud_->seen < 15;
+	if (same_battle && delta_ && debug_["rating_label"] == "RP" &&
+	    debug_["rating"] != hud_->value + *delta_) {
+		confirmations_ = 0;
+		return;
+	}
+	// Early RP readings can still be the old value before the animation starts.
+	if (same_battle && debug_["rating_label"] == "RP" && debug_["rating"] == hud_->value &&
+	    now - result_since_ < 3) {
+		confirmations_ = 0;
+		return;
+	}
+	if (debug_["rating_label"] == "RP") {
+		// The signed amount above the gauge disappears when the animation finishes.
+		const Roi change{0.075, 0.385, 0.26, 0.042};
+		static const std::regex signed_amount(R"(([+-]) *([0-9]{1,4}))");
+		for (const auto &item : ocr_.read(full, &change, 0, 4)) {
+			std::smatch amount;
+			if (item.conf >= 0.68 && std::regex_match(item.text, amount, signed_amount)) {
+				const int sign = amount[1].str() == "+" ? 1 : -1;
+				if ((sign > 0) == (debug_["result"] == "win")) {
+					delta_ = sign * std::stoi(amount[2].str());
+					confirmations_ = 0;
+					return;
+				}
+			}
+		}
+	}
+	if (candidate_ != debug_ || now - last_seen_ > 3) {
+		candidate_ = debug_;
+		confirmations_ = 0;
+	}
+	last_seen_ = now;
+	if (++confirmations_ >= 2) {
+		auto match = candidate_;
+		if (verified_players_ && players_.is_object() && now - players_seen_ < 1200)
+			match.update(players_);
+		if (delta_ && match["rating_label"] == "RP")
+			match["delta"] = *delta_;
+		record(std::move(match), now);
+		hud_.reset();
+		hud_candidate_.reset();
+		hud_boundary_ = false;
+		verified_players_ = false;
+		recorded_ = true;
+	}
+}
+
+void StriveDetector::record(json match, double now)
+{
+	const auto character = jget(match, "my_char");
+	if (character.is_string() && jget(cfg_.section("history"), "reset_on_character_change") != false)
+		store_.observe_character(character.get<std::string>());
+	match["ts"] = now;
+	match["auto"] = true;
+	store_.add(match);
+}
+
+void StriveDetector::read_hud(const Image &full, double now)
+{
+	if (!players_.is_object() || now - players_seen_ >= 1200 || now < hud_read_at_)
+		return;
+	hud_read_at_ = now + 1.3;
+	const bool left = players_["side"] == "p1";
+	const Roi boxes[] = {{0.075, 0.060, 0.23, 0.080}, {0.69, 0.060, 0.245, 0.080}};
+	const auto matches_character = [](const Items &items, const json &character) {
+		return std::any_of(items.begin(), items.end(), [&](const TextItem &item) {
+			return item.conf >= 0.70 && strive_character(item.text) == character;
+		});
+	};
+	const auto mine = ocr_.read(full, &boxes[left ? 0 : 1], 0, 8, 2.0);
+	const auto rating = strive_rating(mine, "RP");
+	if (!rating || !matches_character(mine, players_["my_char"]))
+		return;
+	// A rematch can omit the intro. Require the HUD to agree with its last known matchup.
+	const auto opponent = ocr_.read(full, &boxes[left ? 1 : 0], 0, 8, 2.0);
+	if (!matches_character(opponent, players_["opp_char"]) || !strive_rating(opponent, "RP"))
+		return;
+
+	const int session = store_.session_id();
+	const auto last = store_.last();
+	const json last_id = last ? jget(*last, "id") : json(nullptr);
+	if (hud_ && (hud_->session != session || now - hud_->seen > 120 ||
+		     hud_->last_id != last_id ||
+		     hud_->players["my_char"] != players_["my_char"])) {
+		hud_.reset();
+		hud_candidate_.reset();
+	}
+	if (hud_ && now - hud_->seen >= 4)
+		hud_boundary_ = true;
+	if (hud_candidate_ != rating->first || now - hud_candidate_at_ > 5) {
+		hud_candidate_ = rating->first;
+		hud_reads_ = 0;
+	}
+	hud_candidate_at_ = now;
+	if (++hud_reads_ < 2)
+		return;
+	if (hud_ && rating->first != hud_->value) {
+		const int change = rating->first - hud_->value;
+		if (!hud_boundary_)
+			return;
+		const bool verified_side = players_["my_char"] != players_["opp_char"] || players_seen_ > hud_->seen;
+		if (verified_side && std::abs(change) <= 3000) {
+			auto match = hud_->players;
+			match.update({{"rating", rating->first}, {"rating_label", "RP"},
+				      {"result", change > 0 ? "win" : "lose"}, {"delta", change}});
+			record(std::move(match), now);
+			debug_ = {{"scene", "hud_recovery"}, {"rating", rating->first}, {"delta", change}};
+		}
+	}
+	const auto saved = store_.last();
+	hud_ = HudRating{rating->first, players_, now, store_.session_id(), saved ? jget(*saved, "id") : json(nullptr)};
+	hud_boundary_ = false;
+	hud_reads_ = 2;
+	verified_players_ = true;
+}
+
+void StriveDetector::read_players(const Image &full, double now)
+{
+	if (full.empty())
+		return;
+	const auto dark = [&full](int y) {
+		const auto *p = full.at(full.w * 65 / 100, full.h * y / 100);
+		return std::max({p[0], p[1], p[2]}) < 50;
+	};
+	if (!dark(8) || !dark(87))
+		return;
+	// The intro's two black player cards are separated from the scene by thin dividers.
+	const auto divider = [&full](int y0, int y1) {
+		for (int y = full.h * y0 / 1000; y <= full.h * y1 / 1000; ++y) {
+			int gray = 0;
+			for (int x = 33; x <= 65; x += 4) {
+				const auto *p = full.at(full.w * x / 100, y);
+				gray += std::min({p[0], p[1], p[2]}) >= 45;
+			}
+			if (gray >= 7)
+				return true;
+		}
+		return false;
+	};
+	reading_intro_ = !players_.is_object() && divider(115, 125) && divider(900, 915);
+	if (now < next_players_)
+		return;
+	next_players_ = now + (reading_intro_ ? 0.3 : 0.8);
+
+	const Roi cards[] = {{0.12, 0.34, 0.29, 0.14}, {0.12, 0.52, 0.29, 0.14}};
+	const Roi names[] = {{0.505, 0.065, 0.18, 0.038}, {0.505, 0.847, 0.18, 0.038}};
+	std::string chars[2];
+	bool registered[2] = {}, you[2] = {};
+	const json configured = jget(cfg_.section("ggst_player"), "names");
+	std::vector<std::string> player_names;
+	if (configured.is_array())
+		for (const auto &name : configured)
+			if (name.is_string())
+				player_names.push_back(name.get<std::string>());
+	for (int i = 0; i < 2; ++i) {
+		std::string header;
+		auto items = ocr_.read(full, &cards[i], 0, 8, 1.0);
+		std::sort(items.begin(), items.end(), [](const TextItem &a, const TextItem &b) { return a.cx < b.cx; });
+		for (const auto &item : items) {
+			if (item.conf >= 0.65 && item.cy < cards[i].y + 0.052) {
+				header += " " + item.text;
+				you[i] |= tokens(item.text) == std::vector<std::string>{"YOU"};
+			}
+			if (item.conf >= 0.70 && item.cy >= cards[i].y + 0.052) {
+				auto character = strive_character(item.text);
+				if (!character.empty())
+					chars[i] = character;
+			}
+		}
+		std::string tag;
+		for (const auto &token : tokens(header))
+			tag += token;
+		const std::string seat = i == 0 ? "PLAYER1" : "PLAYER2";
+		you[i] |= tag == seat + "YOU";
+		if (!you[i]) {
+			const Roi marker{0.207, cards[i].y + 0.008, 0.053, 0.044};
+			const auto [text, score] = ocr_.recognize(crop(full, marker));
+			you[i] = score >= 0.65 && tokens(text) == std::vector<std::string>{"YOU"};
+		}
+		if (tag.find(seat) != 0 || chars[i].empty())
+			return;
+		if (!player_names.empty()) {
+			for (const auto &item : ocr_.read(full, &names[i], 0, 4))
+				registered[i] |= item.conf >= 0.70 && name_matches(item.text, player_names);
+			if (!registered[i]) {
+				const auto [text, score] = ocr_.recognize(crop(full, names[i]));
+				registered[i] = score >= 0.70 && name_matches(text, player_names);
+			}
+		}
+	}
+	const bool from_marker = you[0] != you[1];
+	const bool from_name = registered[0] != registered[1] && (!from_marker || registered[0] == you[0]);
+	if (!from_name && !from_marker)
+		return;
+	const int me = (from_name ? registered[0] : you[0]) ? 0 : 1;
+	if (hud_)
+		hud_boundary_ = true;
+	players_ = {{"my_char", chars[me]}, {"opp_char", chars[1 - me]}, {"side", me == 0 ? "p1" : "p2"}};
+	verified_players_ = true;
+	players_seen_ = now;
+	debug_ = {{"scene", "matchup"}, {"side", me == 0 ? "p1" : "p2"}, {"by", from_name ? "name" : "you"},
+		  {"my_char", chars[me]}, {"opp_char", chars[1 - me]}};
 }
 
 } // namespace sf6

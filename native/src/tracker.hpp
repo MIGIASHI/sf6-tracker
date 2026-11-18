@@ -59,12 +59,16 @@ public:
 private:
 	void loop();
 	json decorate(const json &m) const;
+	bool is_strive() const { return cfg_.section("game") == "ggst"; }
+	Store &active_store() { return is_strive() ? strive_store_ : store_; }
 
 	TrackerPaths paths_;
 	Config cfg_;
 	Store store_;
+	Store strive_store_;
 	Ocr ocr_;
 	std::unique_ptr<Detector> det_;
+	std::unique_ptr<StriveDetector> strive_det_;
 	std::unique_ptr<HttpServer> http_;
 	InputCapture input_;
 	int port_ = 0;

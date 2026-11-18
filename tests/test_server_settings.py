@@ -76,6 +76,28 @@ class ServerSettingsTests(unittest.TestCase):
             self.assertEqual(error.exception.code,400)
         with self.assertRaises(HTTPError): self.request('/api/config',{'history':[]})
 
+    @unittest.skipUnless(NATIVE, "game selection is native-only")
+    def test_game_histories_are_separate(self):
+        self.assertEqual(self.request('/api/config')['game'], 'sf6')
+        self.request('/api/matches', {'result': 'win', 'rating': 1500, 'rating_label': 'MR'})
+        self.request('/api/config', {'game': 'ggst'})
+        config = self.request('/api/config')
+        self.assertIn({'id': 'ggst_sol', 'name': 'ソル'}, config['roster'])
+        self.assertEqual(len(config['roster']), len({ch['id'] for ch in config['roster']}))
+        self.request('/api/config', {'ggst_player': {'names': ['StrivePlayer']}})
+        self.assertEqual(self.request('/api/matches'), [])
+        self.request('/api/matches', {'result': 'lose', 'rating': 13200, 'rating_label': 'RP'})
+        self.request('/api/matches', {'result': 'win', 'rating': 1807, 'rating_label': 'DR'})
+        state = self.request('/api/state')
+        self.assertEqual((state['wins'], state['losses'], state['label'], state['series']), (1, 1, 'DR', [1807]))
+        saved = json.loads(Path(self.tmp.name, 'ggst', 'history.json').read_text(encoding='utf-8'))
+        self.assertEqual(len(saved['matches']), 2)
+        self.request('/api/config', {'game': 'sf6'})
+        config = self.request('/api/config')
+        self.assertEqual(config['player']['names'], [])
+        self.assertEqual(config['ggst_player']['names'], ['StrivePlayer'])
+        self.assertEqual([match['rating'] for match in self.request('/api/matches')], [1500])
+
     def test_selected_keys_and_wheel_only(self):
         result = self.request('/api/keys?codes=65,256,257')
         self.assertTrue(set(result['pressed']) <= {65,256,257})

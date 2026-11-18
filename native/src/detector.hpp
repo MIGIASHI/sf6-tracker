@@ -49,6 +49,46 @@ private:
 
 using RatingKey = std::pair<int, std::string>; // (value, "MR" / "LP")
 
+class StriveDetector {
+public:
+	StriveDetector(Config &cfg, Store &store, Ocr &ocr) : cfg_(cfg), store_(store), ocr_(ocr) {}
+	void process(const Image &full, double now);
+	json inspect(const Image &full);
+	json debug() const { return debug_; }
+	double hurry() const { return (result_visible_ && !recorded_) || reading_intro_ ? 0.35 : 0; }
+
+private:
+	void read_players(const Image &full, double now);
+	void read_hud(const Image &full, double now);
+	void record(json match, double now);
+	struct HudRating {
+		int value;
+		json players;
+		double seen;
+		int session;
+		json last_id;
+	};
+	Config &cfg_;
+	Store &store_;
+	Ocr &ocr_;
+	json players_;
+	double players_seen_ = 0, next_players_ = 0;
+	json candidate_;
+	json debug_ = json::object();
+	int confirmations_ = 0, absent_ = 0;
+	double last_seen_ = 0;
+	bool result_visible_ = false, recorded_ = false;
+	bool reading_intro_ = false;
+	std::optional<int> delta_;
+	std::optional<HudRating> hud_;
+	std::optional<int> hud_candidate_;
+	int hud_reads_ = 0;
+	double hud_read_at_ = 0, hud_candidate_at_ = 0;
+	bool hud_boundary_ = false;
+	bool verified_players_ = false;
+	double result_since_ = 0;
+};
+
 // One picture plus what was read from it, so each place is read at most once.
 class FrameContext {
 public:
