@@ -51,15 +51,19 @@ using RatingKey = std::pair<int, std::string>; // (value, "MR" / "LP")
 
 class StriveDetector {
 public:
-	StriveDetector(Store &store, Ocr &ocr) : store_(store), ocr_(ocr) {}
+	StriveDetector(Config &cfg, Store &store, Ocr &ocr) : cfg_(cfg), store_(store), ocr_(ocr) {}
 	void process(const Image &full, double now);
 	json inspect(const Image &full);
 	json debug() const { return debug_; }
 	double hurry() const { return confirmations_ == 1 ? 0.4 : 0; }
 
 private:
+	void read_players(const Image &full, double now);
+	Config &cfg_;
 	Store &store_;
 	Ocr &ocr_;
+	json players_;
+	double players_seen_ = 0, next_players_ = 0;
 	json candidate_;
 	json debug_ = json::object();
 	int confirmations_ = 0, absent_ = 0;

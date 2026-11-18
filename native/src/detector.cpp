@@ -691,7 +691,19 @@ bool strive_header(const Image &full)
 		const auto *pixel = full.at(full.w * col / 10, full.h * 6 / 100);
 		red += pixel[2] >= 65 && pixel[2] > pixel[1] * 2 && pixel[2] > pixel[0] * 2;
 	}
-	return red >= 8;
+	if (red >= 8)
+		return true;
+	// The BATTLE CHART underline is shared by the original and updated result layouts.
+	for (int y = full.h * 225 / 1000; y <= full.h * 265 / 1000; ++y) {
+		int white = 0;
+		for (int col = 71; col <= 91; col += 2) {
+			const auto *pixel = full.at(full.w * col / 100, y);
+			white += pixel[0] >= 195 && pixel[1] >= 195 && pixel[2] >= 195;
+		}
+		if (white >= 10)
+			return true;
+	}
+	return false;
 }
 
 std::optional<RatingKey> strive_rating(Items items, const std::string &label)
@@ -770,12 +782,13 @@ json StriveDetector::inspect(const Image &full)
 void StriveDetector::process(const Image &full, double now)
 {
 	if (!strive_header(full)) {
+		debug_ = {{"scene", "unknown"}};
+		read_players(full, now);
 		if (++absent_ >= 2) {
 			recorded_ = false;
 			absent_ = 2;
 		}
 		confirmations_ = 0;
-		debug_ = {{"scene", "unknown"}};
 		return;
 	}
 	absent_ = 0;
@@ -793,11 +806,77 @@ void StriveDetector::process(const Image &full, double now)
 	last_seen_ = now;
 	if (++confirmations_ >= 2) {
 		auto match = candidate_;
+		if (players_.is_object() && now - players_seen_ < 1200) {
+			match.update(players_);
+			if (jget(cfg_.section("history"), "reset_on_character_change") != false)
+				store_.observe_character(match["my_char"].get<std::string>());
+		}
+		players_ = nullptr;
 		match["ts"] = now;
 		match["auto"] = true;
 		store_.add(match);
 		recorded_ = true;
 	}
+}
+
+void StriveDetector::read_players(const Image &full, double now)
+{
+	if (full.empty() || now < next_players_)
+		return;
+	next_players_ = now + 0.8;
+	const auto dark = [&full](int y) {
+		const auto *p = full.at(full.w * 65 / 100, full.h * y / 100);
+		return std::max({p[0], p[1], p[2]}) < 50;
+	};
+	if (!dark(8) || !dark(87))
+		return;
+
+	const Roi cards[] = {{0.12, 0.34, 0.29, 0.14}, {0.12, 0.52, 0.29, 0.14}};
+	const Roi names[] = {{0.505, 0.065, 0.18, 0.038}, {0.505, 0.847, 0.18, 0.038}};
+	std::string chars[2];
+	bool registered[2] = {}, you[2] = {};
+	const json configured = jget(cfg_.section("ggst_player"), "names");
+	std::vector<std::string> player_names;
+	if (configured.is_array())
+		for (const auto &name : configured)
+			if (name.is_string())
+				player_names.push_back(name.get<std::string>());
+	for (int i = 0; i < 2; ++i) {
+		std::string header;
+		for (const auto &item : ocr_.read(full, &cards[i], 0, 8, 1.0)) {
+			if (item.conf >= 0.65 && item.cy < cards[i].y + 0.052) {
+				header += " " + item.text;
+				you[i] |= tokens(item.text) == std::vector<std::string>{"YOU"};
+			}
+			if (item.conf >= 0.70 && item.cy >= cards[i].y + 0.052) {
+				auto character = strive_character(item.text);
+				if (!character.empty())
+					chars[i] = character;
+			}
+		}
+		std::string tag;
+		for (const auto &token : tokens(header))
+			tag += token;
+		if (tag.find(i == 0 ? "PLAYER1" : "PLAYER2") == std::string::npos || chars[i].empty())
+			return;
+		if (!player_names.empty()) {
+			for (const auto &item : ocr_.read(full, &names[i], 0, 4))
+				registered[i] |= item.conf >= 0.70 && name_matches(item.text, player_names);
+			if (!registered[i]) {
+				const auto [text, score] = ocr_.recognize(crop(full, names[i]));
+				registered[i] = score >= 0.70 && name_matches(text, player_names);
+			}
+		}
+	}
+	const bool from_marker = you[0] != you[1];
+	const bool from_name = registered[0] != registered[1] && (!from_marker || registered[0] == you[0]);
+	if (!from_name && !from_marker)
+		return;
+	const int me = (from_name ? registered[0] : you[0]) ? 0 : 1;
+	players_ = {{"my_char", chars[me]}, {"opp_char", chars[1 - me]}};
+	players_seen_ = now;
+	debug_ = {{"scene", "matchup"}, {"side", me == 0 ? "p1" : "p2"}, {"by", from_name ? "name" : "you"},
+		  {"my_char", chars[me]}, {"opp_char", chars[1 - me]}};
 }
 
 } // namespace sf6

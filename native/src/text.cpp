@@ -47,12 +47,77 @@ const std::vector<Character> &roster()
 
 std::string char_name(const std::string &id, const std::string &lang)
 {
+	for (const auto &c : strive_roster())
+		if (id == c.id)
+			return lang == "ja" ? c.ja : c.en;
 	if (id.empty())
 		return "?";
 	for (const auto &c : roster())
 		if (id == c.id)
 			return lang == "ja" ? c.ja : c.en;
 	return id;
+}
+
+const std::vector<Character> &strive_roster()
+{
+	// https://www.guiltygear.com/ggst/en/character/
+	static const std::vector<Character> characters = {
+		{"ggst_sol", "Sol Badguy", "ソル", {}},
+		{"ggst_ky", "Ky Kiske", "カイ", {}},
+		{"ggst_may", "May", "メイ", {}},
+		{"ggst_axl", "Axl Low", "アクセル", {}},
+		{"ggst_chipp", "Chipp Zanuff", "チップ", {}},
+		{"ggst_potemkin", "Potemkin", "ポチョムキン", {}},
+		{"ggst_faust", "Faust", "ファウスト", {}},
+		{"ggst_millia", "Millia Rage", "ミリア", {}},
+		{"ggst_zato", "Zato-1", "ザトー", {}},
+		{"ggst_ramlethal", "Ramlethal Valentine", "ラムレザル", {}},
+		{"ggst_leo", "Leo Whitefang", "レオ", {}},
+		{"ggst_nagoriyuki", "Nagoriyuki", "名残雪", {}},
+		{"ggst_giovanna", "Giovanna", "ジオヴァーナ", {}},
+		{"ggst_anji", "Anji Mito", "闇慈", {}},
+		{"ggst_ino", "I-No", "イノ", {}},
+		{"ggst_goldlewis", "Goldlewis Dickinson", "ゴールドルイス", {}},
+		{"ggst_jacko", "Jack-O'", "ジャック・オー", {}},
+		{"ggst_happychaos", "Happy Chaos", "ハッピーケイオス", {}},
+		{"ggst_baiken", "Baiken", "梅喧", {}},
+		{"ggst_testament", "Testament", "テスタメント", {}},
+		{"ggst_bridget", "Bridget", "ブリジット", {}},
+		{"ggst_sin", "Sin Kiske", "シン", {}},
+		{"ggst_bedman", "Bedman?", "ベッドマン？", {}},
+		{"ggst_asuka", "Asuka R♯", "飛鳥＝R♯", {}},
+		{"ggst_johnny", "Johnny", "ジョニー", {}},
+		{"ggst_elphelt", "Elphelt Valentine", "エルフェルト", {}},
+		{"ggst_aba", "A.B.A", "アバ", {}},
+		{"ggst_slayer", "Slayer", "スレイヤー", {}},
+		{"ggst_dizzy", "Queen Dizzy", "ディズィー", {}},
+		{"ggst_venom", "Venom", "ヴェノム", {}},
+		{"ggst_unika", "Unika", "ユニカ", {}},
+		{"ggst_lucy", "Lucy", "ルーシー", {}},
+		{"ggst_jam", "Jam Kuradoberi", "紗夢", {}},
+		{"ggst_roboky", "Robo-Ky", "ロボカイ", {}},
+	};
+	return characters;
+}
+
+std::string strive_character(const std::string &text)
+{
+	auto compact = [](const std::string &value) {
+		std::string joined;
+		for (const auto &token : tokens(value))
+			joined += token;
+		return joined;
+	};
+	const auto name = compact(text);
+	if (name.size() < 3)
+		return {};
+	for (const auto &character : strive_roster()) {
+		const auto English = compact(character.en);
+		if (name == English || (name.size() >= 8 &&
+			sequence_ratio(utf8_to_u32(name), utf8_to_u32(English)) >= 0.88))
+			return character.id;
+	}
+	return {};
 }
 
 namespace {

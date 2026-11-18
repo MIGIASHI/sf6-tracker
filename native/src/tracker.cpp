@@ -118,7 +118,7 @@ bool Tracker::start(int port_override)
 		error_ = "文字認識を読み込めません: " + ocr_.error();
 	}
 	det_ = std::make_unique<Detector>(cfg_, store_, ocr_);
-	strive_det_ = std::make_unique<StriveDetector>(strive_store_, ocr_);
+	strive_det_ = std::make_unique<StriveDetector>(cfg_, strive_store_, ocr_);
 	port_ = port_override ? port_override : jget(cfg_.section("server"), "port").get<int>();
 
 	http_ = std::make_unique<HttpServer>([this](const HttpRequest &req) -> HttpResponse {
@@ -464,7 +464,7 @@ json Tracker::config_with_roster()
 	json lang = jget(c["display"], "char_lang");
 	std::string l = lang.is_string() ? lang.get<std::string>() : "ja";
 	json r = json::array();
-	for (const auto &ch : roster())
+	for (const auto &ch : c["game"] == "ggst" ? strive_roster() : roster())
 		r.push_back({{"id", ch.id}, {"name", l == "ja" ? ch.ja : ch.en}});
 	c["roster"] = r;
 	return c;
@@ -477,7 +477,7 @@ void Tracker::update_config(const json &patch)
 	cfg_.update(patch);
 	if (was_strive != is_strive()) {
 		det_ = std::make_unique<Detector>(cfg_, store_, ocr_);
-		strive_det_ = std::make_unique<StriveDetector>(strive_store_, ocr_);
+		strive_det_ = std::make_unique<StriveDetector>(cfg_, strive_store_, ocr_);
 		kept_.clear();
 		last_full_ = {};
 	}

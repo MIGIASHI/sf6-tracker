@@ -17,6 +17,8 @@ struct Character {
 	std::vector<const char *> extra; // other spellings the reading may return
 };
 const std::vector<Character> &roster();
+const std::vector<Character> &strive_roster();
+std::string strive_character(const std::string &text);
 std::string char_name(const std::string &id, const std::string &lang); // "?" for none
 
 std::vector<std::string> tokens(const std::string &text); // upper-cased runs of A-Z / 0-9

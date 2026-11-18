@@ -19,7 +19,7 @@ int main(int argc, char **argv)
 	sf6::Config cfg(argv[3]);
 	sf6::Store store(argv[3]);
 	sf6::Detector det(cfg, store, ocr);
-	sf6::StriveDetector strive(store, ocr);
+	sf6::StriveDetector strive(cfg, store, ocr);
 	const bool ggst = argc > 5 && std::string(argv[5]) == "--ggst";
 	std::ifstream f(argv[4], std::ios::binary);
 	for (;;) {

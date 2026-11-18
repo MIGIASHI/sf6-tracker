@@ -377,6 +377,7 @@ json default_config()
   "capture": {"width": 1280, "look_width": 640, "interval": 1.5},
   "server": {"port": 17860},
   "game": "sf6",
+  "ggst_player": {"names": []},
   "player": {"names": [], "chars": [], "side": "p1", "rating_label": "auto"},
   "display": {"char_lang": "ja"},
   "history": {"retention_hours": 0, "reset_on_character_change": true},
