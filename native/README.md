@@ -64,7 +64,7 @@ python native/tests/test_http.py http-build/Release/http_check.exe
 ```
 
 Linux では最後の実行ファイルを `http-build/http_check` にします。GitHub Actions でも Windows / Linux の両方で実行します。
-## ギルティギア ストライヴ（試験対応）
+## ギルティギア ストライヴ
 
 1. OBSでストライヴのゲームキャプチャを作り、「SF6 Tracker」フィルターを付けます。ゲーム画面全体が映るようにし、同時に映像を送るフィルターは1つにします。
 2. 操作パネルの戦績タブ上部で「ギルティギア ストライヴ」を選び、設定タブでゲーム内のプレイヤーネームを登録します。オーバーレイには選択したゲームの戦績が出ます。
