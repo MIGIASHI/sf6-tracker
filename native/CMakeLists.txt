@@ -99,6 +99,8 @@ if(WIN32)
     DESTINATION "${CMAKE_PROJECT_NAME}/data/ort"
     RENAME sf6-onnxruntime.dll
   )
+  install(FILES "${SF6_ORT_DIR}/LICENSE" "${SF6_ORT_DIR}/ThirdPartyNotices.txt"
+    DESTINATION "${CMAKE_PROJECT_NAME}/data/licenses/onnxruntime" OPTIONAL)
 endif()
 install(
   FILES "${SF6_MODELS_DIR}/ch_PP-OCRv4_det_infer.onnx" "${SF6_MODELS_DIR}/ch_PP-OCRv4_rec_infer.onnx"

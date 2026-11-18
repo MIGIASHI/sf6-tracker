@@ -49,6 +49,24 @@ private:
 
 using RatingKey = std::pair<int, std::string>; // (value, "MR" / "LP")
 
+class StriveDetector {
+public:
+	StriveDetector(Store &store, Ocr &ocr) : store_(store), ocr_(ocr) {}
+	void process(const Image &full, double now);
+	json inspect(const Image &full);
+	json debug() const { return debug_; }
+	double hurry() const { return confirmations_ == 1 ? 0.4 : 0; }
+
+private:
+	Store &store_;
+	Ocr &ocr_;
+	json candidate_;
+	json debug_ = json::object();
+	int confirmations_ = 0, absent_ = 0;
+	double last_seen_ = 0;
+	bool recorded_ = false;
+};
+
 // One picture plus what was read from it, so each place is read at most once.
 class FrameContext {
 public:

@@ -74,8 +74,12 @@ jobs:
         run: pip install numpy opencv-python-headless "rapidocr-onnxruntime==${RAPIDOCR_VERSION}"
       - name: ONNX Runtime for Linux
         run: |
-          curl -sSL -o ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
-          tar xzf ort.tgz && mv "onnxruntime-linux-x64-${ORT_VERSION}" ort
+          curl -fsSL --retry 3 -o ort.zip "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/${ORT_VERSION}"
+          echo '9c32108e9a1c78b090a95c2a219f244dd5f067d4caf68fb0f967103f3f20839c  ort.zip' | sha256sum -c
+          unzip -q ort.zip -d ort-nuget
+          mkdir -p ort/lib
+          cp -r ort-nuget/build/native/include ort/include
+          cp ort-nuget/runtimes/linux-x64/native/*.so ort/lib/
       - name: Build the test tools
         run: |
           S=native/src
@@ -118,9 +122,13 @@ jobs:
           key: obs-deps-${{ hashFiles('native/buildspec.json') }}
       - name: Get ONNX Runtime and the OCR models
         run: |
-          Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/onnxruntime-win-x64-$env:ORT_VERSION.zip" -OutFile ort.zip
-          Expand-Archive ort.zip -DestinationPath .
-          Rename-Item "onnxruntime-win-x64-$env:ORT_VERSION" ort
+          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/$env:ORT_VERSION" -OutFile ort.zip
+          if ((Get-FileHash ort.zip -Algorithm SHA256).Hash -ne '9c32108e9a1c78b090a95c2a219f244dd5f067d4caf68fb0f967103f3f20839c') { throw 'ONNX Runtime package hash mismatch' }
+          Expand-Archive ort.zip -DestinationPath ort-nuget
+          New-Item -ItemType Directory -Path ort/lib -Force
+          Copy-Item ort-nuget/build/native/include ort/include -Recurse
+          Copy-Item ort-nuget/runtimes/win-x64/native/onnxruntime.dll ort/lib/
+          Copy-Item ort-nuget/LICENSE,ort-nuget/ThirdPartyNotices.txt ort/
           pip download --no-deps --only-binary=:all: "rapidocr-onnxruntime==$env:RAPIDOCR_VERSION" -d whl
           Copy-Item (Get-ChildItem whl/*.whl)[0].FullName rapidocr.zip
           Expand-Archive rapidocr.zip -DestinationPath rapidocr

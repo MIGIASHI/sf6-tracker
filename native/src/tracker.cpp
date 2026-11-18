@@ -93,7 +93,9 @@ std::string encode_bmp(const Image &img)
 }
 
 Tracker::Tracker(TrackerPaths paths) : paths_(std::move(paths)), cfg_(paths_.data_dir),
-	store_(paths_.data_dir, cfg_.section("history").value("retention_hours", 0.0)) {}
+	store_(paths_.data_dir, cfg_.section("history").value("retention_hours", 0.0)),
+	strive_store_((std::filesystem::u8path(paths_.data_dir) / "ggst").u8string(),
+		      cfg_.section("history").value("retention_hours", 0.0)) {}
 
 Tracker::~Tracker()
 {
@@ -110,11 +112,13 @@ bool Tracker::start(int port_override)
 {
 	if (running_)
 		return true;
+	make_dirs((std::filesystem::u8path(paths_.data_dir) / "ggst").u8string());
 	if (!ocr_.load(paths_.ort_library, paths_.det_model, paths_.rec_model)) {
 		std::lock_guard<std::mutex> lock(err_mutex_);
 		error_ = "文字認識を読み込めません: " + ocr_.error();
 	}
 	det_ = std::make_unique<Detector>(cfg_, store_, ocr_);
+	strive_det_ = std::make_unique<StriveDetector>(strive_store_, ocr_);
 	port_ = port_override ? port_override : jget(cfg_.section("server"), "port").get<int>();
 
 	http_ = std::make_unique<HttpServer>([this](const HttpRequest &req) -> HttpResponse {
@@ -206,6 +210,8 @@ bool Tracker::start(int port_override)
 		if (p == "/api/config") {
 			if (!data.is_object() || (data.contains("history") && !data["history"].is_object()))
 				return json_response({{"error", "invalid settings"}}, 400);
+			if (data.contains("game") && data["game"] != "ggst" && data["game"] != "sf6")
+				return json_response({{"error", "unsupported game"}}, 400);
 			json hours = jget(jget(data, "history"), "retention_hours");
 			if (!hours.is_null() && (!hours.is_number() || hours.get<double>() < 0 || hours.get<double>() > 87600))
 				return json_response({{"error", "invalid retention hours"}}, 400);
@@ -296,13 +302,15 @@ void Tracker::loop()
 	std::vector<uint8_t> bgra;
 	while (running_) {
 		store_.prune();
+		strive_store_.prune();
 		auto t0 = std::chrono::steady_clock::now();
 		double interval;
 		{
 			std::lock_guard<std::mutex> lock(det_mutex_);
 			json cap = cfg_.section("capture");
 			double cfg_interval = cap.is_object() && cap.contains("interval") ? cap["interval"].get<double>() : 1.5;
-			interval = det_->hurry() > 0 ? det_->hurry() : cfg_interval;
+			double hurry = is_strive() ? strive_det_->hurry() : det_->hurry();
+			interval = hurry > 0 ? hurry : cfg_interval;
 		}
 		// Ask the filter for a picture and wait for it (no picture: OBS not showing the source).
 		int w = 0, h = 0;
@@ -326,7 +334,10 @@ void Tracker::loop()
 				Image full = from_frame(look);
 				double now = now_seconds();
 				std::lock_guard<std::mutex> lock(det_mutex_);
-				det_->process(look, full, now);
+				if (is_strive())
+					strive_det_->process(full, now);
+				else
+					det_->process(look, full, now);
 				kept_.push_back({++seq_, now, resize_area(full, 640, std::max(1, full.h * 640 / std::max(1, full.w)))});
 				while (kept_.size() > 60)
 					kept_.pop_front();
@@ -364,7 +375,9 @@ json Tracker::decorate(const json &m) const
 
 json Tracker::state(const std::string &scope)
 {
-	json all = store_.matches();
+	const bool strive = is_strive();
+	auto &store = strive ? strive_store_ : store_;
+	json all = store.matches();
 	json ms = json::array();
 	if (scope == "today") {
 		std::string today = day_of(now_seconds());
@@ -374,18 +387,11 @@ json Tracker::state(const std::string &scope)
 	} else if (scope == "all") {
 		ms = all;
 	} else {
-		int sid = store_.session_id();
+		int sid = store.session_id();
 		for (const auto &m : all)
 			if (jget(m, "session") == json(sid))
 				ms.push_back(m);
 	}
-	json s = summarize(ms);
-	if (s["rating"].is_null()) // nothing rated in this scope yet: still show the last known rating
-		for (auto it = all.rbegin(); it != all.rend(); ++it)
-			if (!jget(*it, "rating").is_null()) {
-				s["rating"] = (*it)["rating"];
-				break;
-			}
 	// the label read off the screen (LP below Master, MR above) wins over the one in the settings
 	json label = nullptr;
 	for (auto it = all.rbegin(); it != all.rend(); ++it)
@@ -396,8 +402,20 @@ json Tracker::state(const std::string &scope)
 		}
 	if (label.is_null()) {
 		json fixed = jget(cfg_.section("player"), "rating_label");
-		label = (fixed == "MR" || fixed == "LP") ? fixed : json("MR");
+		label = strive ? json("RP") : ((fixed == "MR" || fixed == "LP") ? fixed : json("MR"));
 	}
+	json graph_matches = ms;
+	if (strive) // RP and DR are different scales.
+		for (auto &match : graph_matches)
+			if (jget(match, "rating_label") != label)
+				match["rating"] = nullptr;
+	json s = summarize(graph_matches);
+	if (s["rating"].is_null()) // Keep the last known rating when this scope has none.
+		for (auto it = all.rbegin(); it != all.rend(); ++it)
+			if (!jget(*it, "rating").is_null() && (!strive || jget(*it, "rating_label") == label)) {
+				s["rating"] = (*it)["rating"];
+				break;
+			}
 	s["label"] = label;
 	s["scope"] = scope;
 	json list = json::array();
@@ -421,7 +439,10 @@ json Tracker::status()
 	size_t frames;
 	{
 		std::lock_guard<std::mutex> lock(det_mutex_);
-		debug = det_ ? det_->debug() : json::object();
+		if (is_strive() && strive_det_)
+			debug = strive_det_->debug();
+		else
+			debug = det_ ? det_->debug() : json::object();
 		frames = kept_.size();
 	}
 	std::string err = error();
@@ -430,7 +451,7 @@ json Tracker::status()
 		{"tick_ms", tick_ms_.load()},
 		{"debug", debug},
 		{"frames", frames},
-		{"session", store_.session_id()},
+		{"session", active_store().session_id()},
 		{"pending", json::array()},
 		{"file_mode", false},
 		{"native", true}};
@@ -439,6 +460,7 @@ json Tracker::status()
 json Tracker::config_with_roster()
 {
 	json c = cfg_.get();
+	c["supported_games"] = {"sf6", "ggst"};
 	json lang = jget(c["display"], "char_lang");
 	std::string l = lang.is_string() ? lang.get<std::string>() : "ja";
 	json r = json::array();
@@ -450,13 +472,23 @@ json Tracker::config_with_roster()
 
 void Tracker::update_config(const json &patch)
 {
+	std::lock_guard<std::mutex> lock(det_mutex_);
+	const bool was_strive = is_strive();
 	cfg_.update(patch);
-	store_.set_retention_hours(cfg_.section("history").value("retention_hours", 0.0));
+	if (was_strive != is_strive()) {
+		det_ = std::make_unique<Detector>(cfg_, store_, ocr_);
+		strive_det_ = std::make_unique<StriveDetector>(strive_store_, ocr_);
+		kept_.clear();
+		last_full_ = {};
+	}
+	const auto retention = cfg_.section("history").value("retention_hours", 0.0);
+	store_.set_retention_hours(retention);
+	strive_store_.set_retention_hours(retention);
 }
 
 json Tracker::matches_decorated()
 {
-	json all = store_.matches(), out = json::array();
+	json all = active_store().matches(), out = json::array();
 	for (auto it = all.rbegin(); it != all.rend(); ++it)
 		out.push_back(decorate(*it));
 	return out;
@@ -469,12 +501,12 @@ json Tracker::add_match(json fields)
 	if (!fields.contains("ts"))
 		fields["ts"] = now_seconds();
 	fields["auto"] = false;
-	return decorate(store_.add(fields));
+	return decorate(active_store().add(fields));
 }
 
 std::optional<json> Tracker::update_match(int id, const json &fields)
 {
-	auto r = store_.update(id, fields);
+	auto r = active_store().update(id, fields);
 	if (r)
 		return decorate(*r);
 	return r;
@@ -482,18 +514,18 @@ std::optional<json> Tracker::update_match(int id, const json &fields)
 
 bool Tracker::delete_match(int id)
 {
-	return store_.remove(id);
+	return active_store().remove(id);
 }
 
 bool Tracker::add_rush(int n)
 {
 	std::lock_guard<std::mutex> lock(det_mutex_);
-	return det_ && det_->add_rush(n, now_seconds());
+	return !is_strive() && det_ && det_->add_rush(n, now_seconds());
 }
 
 int Tracker::new_session()
 {
-	return store_.new_session();
+	return active_store().new_session();
 }
 
 json Tracker::test_frame(const json &seq)
@@ -509,6 +541,11 @@ json Tracker::test_frame(const json &seq)
 	}
 	if (full.empty())
 		return {{"error", "フレームがありません"}};
+	if (is_strive()) {
+		auto out = strive_det_->inspect(full);
+		out["game"] = "ggst";
+		return out;
+	}
 	std::vector<uint8_t> bgra(size_t(full.w) * full.h * 4, 255);
 	for (size_t i = 0, n = size_t(full.w) * full.h; i < n; ++i)
 		for (int c = 0; c < 3; ++c)
@@ -549,7 +586,7 @@ std::string Tracker::frame_bmp(long long seq)
 
 std::string Tracker::csv()
 {
-	return store_.csv();
+	return active_store().csv();
 }
 
 } // namespace sf6

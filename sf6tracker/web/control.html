@@ -64,6 +64,7 @@
 <section id="history" class="on">
   <div class="card">
     <div class="rowf">
+      <select id="game" aria-label="記録するゲーム" hidden onchange="changeGame()"><option value="sf6">ストリートファイター6</option><option value="ggst">ギルティギア ストライヴ</option></select>
       <span class="sum" id="sum">-</span>
       <button class="win" onclick="addMatch('win')">＋勝ち</button>
       <button class="lose" onclick="addMatch('lose')">＋負け</button>
@@ -205,7 +206,14 @@ async function loadMatches() {
 const num = v => v === '' ? null : Number(v);
 async function upd(id, patch) { await api('/api/matches/' + id, patch); matchesJson = ''; document.activeElement.blur(); loadMatches(); }
 async function del(id) { await api('/api/matches/' + id + '/delete', {}); matchesJson = ''; loadMatches(); }
-async function addMatch(result) { await api('/api/matches', { result, opp_char: $('addOpp').value || null, rating_label: ['MR', 'LP'].includes(cfg.player.rating_label) ? cfg.player.rating_label : null }); matchesJson = ''; loadMatches(); }
+async function addMatch(result) {
+  const fields = { result };
+  if (cfg.game !== 'ggst') {
+    fields.opp_char = $('addOpp').value || null;
+    fields.rating_label = ['MR', 'LP'].includes(cfg.player.rating_label) ? cfg.player.rating_label : null;
+  }
+  await api('/api/matches', fields); matchesJson = ''; loadMatches();
+}
 async function newSession() { await api('/api/session/new', {}); matchesJson = ''; loadMatches(); }
 
 // ---------- calibration ----------
@@ -280,6 +288,12 @@ async function runTest() {
   $('test').innerHTML = '<p class="hint">読み取り中…</p>';
   const t = await api('/api/test', { seq: curSeq });
   if (t.error) { $('test').innerHTML = `<p class="hint">${esc(t.error)}</p>`; return; }
+  if (t.game === 'ggst') {
+    boxes = []; draw();
+    const result = t.result === 'win' ? '勝ち' : t.result === 'lose' ? '負け' : '読めず';
+    $('test').textContent = '勝敗 ' + result + ' ／ ' + (t.rating == null ? 'レートを読めず' : t.rating_label + ' ' + t.rating);
+    return;
+  }
   boxes = t.all_texts; draw();
   const sig = k => { const s = t.signals[k]; return `<span class="${s.found ? 'ok' : 'ng'}">${s.found ? '見つかった' : 'なし'}</span>` + (s.score != null ? ` (一致度 ${s.score})` : '') + (s.texts && s.texts.length ? ' ' + esc(s.texts.join(' / ')) : ''); };
   $('test').innerHTML = `<p>VS画面：${sig('vs')}<br>勝ち：${sig('win')}<br>負け：${sig('lose')}<br>
@@ -289,7 +303,16 @@ async function runTest() {
 }
 
 // ---------- settings ----------
-async function loadConfig() { cfg = await api('/api/config'); roster = cfg.roster; }
+async function loadConfig() {
+  cfg = await api('/api/config'); roster = cfg.roster;
+  $('game').hidden = !cfg.supported_games?.includes('ggst');
+  $('game').value = cfg.game === 'ggst' ? 'ggst' : 'sf6';
+  $('addOpp').hidden = cfg.game === 'ggst';
+}
+async function changeGame() {
+  try { await api('/api/config', { game: $('game').value }); }
+  finally { await loadConfig(); matchesJson = ''; await loadMatches(); }
+}
 async function loadSources() {
   const list = await api('/api/sources');
   const cur = cfg.obs.source;

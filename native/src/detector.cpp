@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <regex>
 #include <set>
 
 #include "text.hpp"
@@ -677,6 +678,123 @@ json Detector::inspect(const Frame &look, const Image &full)
 	res_side_ = keep_side;
 	res_label_ = keep_label;
 	return out;
+}
+
+namespace {
+
+bool strive_header(const Image &full)
+{
+	if (full.empty() || full.w < 640 || std::abs(double(full.w) / full.h - 16.0 / 9) > 0.15)
+		return false;
+	int red = 0;
+	for (int col = 1; col <= 9; ++col) {
+		const auto *pixel = full.at(full.w * col / 10, full.h * 6 / 100);
+		red += pixel[2] >= 65 && pixel[2] > pixel[1] * 2 && pixel[2] > pixel[0] * 2;
+	}
+	return red >= 8;
+}
+
+std::optional<RatingKey> strive_rating(Items items, const std::string &label)
+{
+	static const std::regex digits("[0-9]{1,6}");
+	const auto compact = [](std::string text) {
+		text.erase(std::remove_if(text.begin(), text.end(),
+					  [](char c) { return c == ' ' || c == ','; }), text.end());
+		return text;
+	};
+	std::set<int> values;
+	for (const auto &item : items) {
+		if (item.conf < 0.75)
+			continue;
+		auto text = compact(item.text);
+		if (text.size() > label.size() && text.substr(text.size() - label.size()) == label) {
+			auto number = text.substr(0, text.size() - label.size());
+			if (std::regex_match(number, digits))
+				values.insert(std::stoi(number));
+		} else if (text == label) {
+			for (const auto &number : items) {
+				auto value = compact(number.text);
+				if (number.conf >= 0.75 && number.cx < item.cx &&
+				    std::abs(number.cy - item.cy) <= 0.012 &&
+				    std::abs(number.x + number.w - item.x) <= 0.018 &&
+				    std::regex_match(value, digits))
+					values.insert(std::stoi(value));
+			}
+		}
+	}
+	if (values.size() == 1)
+		return RatingKey{*values.begin(), label};
+	return std::nullopt;
+}
+
+} // namespace
+
+json StriveDetector::inspect(const Image &full)
+{
+	json reading = {{"scene", "unknown"}, {"result", nullptr}, {"rating", nullptr}, {"rating_label", nullptr}};
+	if (!strive_header(full))
+		return reading;
+
+	const Roi banner{0.08, 0.22, 0.20, 0.18};
+	std::set<std::string> results;
+	for (const auto &item : ocr_.read(full, &banner, 0, 3, 1.0)) {
+		if (item.conf >= 0.75 && (item.text == "WIN" || item.text == "LOSE"))
+			results.insert(item.text == "WIN" ? "win" : "lose");
+	}
+	if (results.size() != 1)
+		return reading;
+
+	reading["scene"] = "result";
+	reading["result"] = *results.begin();
+	// The RP number moves horizontally under the gauge. DR uses a separate, fixed badge.
+	const Roi rp{0.025, 0.51, 0.415, 0.11}, dr{0.175, 0.435, 0.121, 0.068};
+	auto rating = strive_rating(ocr_.read(full, &rp, 0, 10, 1.0), "RP");
+	if (!rating) {
+		// Text detection can split the stylized DR digits into overlapping boxes.
+		const auto [text, confidence] = ocr_.recognize(crop(full, dr));
+		static const std::regex duel(R"(([0-9]{1,6}) *D[RB])");
+		std::smatch match;
+		if (confidence >= 0.80 && std::regex_match(text, match, duel))
+			rating = RatingKey{std::stoi(match[1].str()), "DR"};
+	}
+	if (rating) {
+		reading["rating"] = rating->first;
+		reading["rating_label"] = rating->second;
+	}
+	return reading;
+}
+
+void StriveDetector::process(const Image &full, double now)
+{
+	if (!strive_header(full)) {
+		if (++absent_ >= 2) {
+			recorded_ = false;
+			absent_ = 2;
+		}
+		confirmations_ = 0;
+		debug_ = {{"scene", "unknown"}};
+		return;
+	}
+	absent_ = 0;
+	if (recorded_)
+		return;
+	debug_ = inspect(full);
+	if (debug_["rating"].is_null()) {
+		confirmations_ = 0;
+		return;
+	}
+	if (candidate_ != debug_ || now - last_seen_ > 3) {
+		candidate_ = debug_;
+		confirmations_ = 0;
+	}
+	last_seen_ = now;
+	if (++confirmations_ >= 2) {
+		auto match = candidate_;
+		match["ts"] = now;
+		match["auto"] = true;
+		store_.add(match);
+		recorded_ = true;
+	}
 }
 
 } // namespace sf6
